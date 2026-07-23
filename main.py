@@ -208,7 +208,7 @@ async def main():
     if not REFERENCE_WAV.exists():
         logger.error(
             f"Voice reference missing: {REFERENCE_WAV} — "
-            "run scripts/capture_reference.py first (see ARCHITECTURE.md)"
+            "run scripts/capture_reference.py first (see README.md)"
         )
         sys.exit(1)
 

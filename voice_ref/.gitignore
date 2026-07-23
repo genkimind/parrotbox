@@ -1,0 +1,4 @@
+# Voice samples are private/local — ignore everything in this directory
+*
+# ...except this file, so the (otherwise empty) directory stays tracked in git
+!.gitignore

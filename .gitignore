@@ -1,7 +1,6 @@
 .venv/
 __pycache__/
 *.pyc
-voice_ref/
 scratch_tts_check/
 scratch_clone_eval/
 .env
