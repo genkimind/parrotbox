@@ -514,25 +514,6 @@ wheels = [
 ]
 
 [[package]]
-name = "clone2"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "chatterbox-tts" },
-    { name = "parakeet-mlx" },
-    { name = "pipecat-ai", extra = ["local"] },
-    { name = "setuptools" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "chatterbox-tts", specifier = ">=0.1.7" },
-    { name = "parakeet-mlx", specifier = ">=0.5.2" },
-    { name = "pipecat-ai", extras = ["local", "openai", "silero"], specifier = ">=1.6.0" },
-    { name = "setuptools", specifier = "<81" },
-]
-
-[[package]]
 name = "colorama"
 version = "0.4.6"
 source = { registry = "https://pypi.org/simple" }
@@ -2178,6 +2159,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5b/1a/d7ab33b3e25dcf2d97d0192fd1e718f2c6e69b5775370413e144fef54256/parakeet_mlx-0.5.2.tar.gz", hash = "sha256:6c6ba3c4d42ebf015dde515e5a83858a516add3f5b2c6bd4a7be5c4ba8bd4d02", size = 37791, upload-time = "2026-06-05T07:52:35.473Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/54/09a3501c74f1ef54a36002534661cb89a0b2f098fcad87fe64f515a0dba7/parakeet_mlx-0.5.2-py3-none-any.whl", hash = "sha256:50afb6ddb62237a6486e214482c25ef12759832fda3cd514e159938fa5970d9c", size = 37353, upload-time = "2026-06-05T07:52:34.452Z" },
+]
+
+[[package]]
+name = "parrotbox"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "chatterbox-tts" },
+    { name = "parakeet-mlx" },
+    { name = "pipecat-ai", extra = ["local"] },
+    { name = "setuptools" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "chatterbox-tts", specifier = ">=0.1.7" },
+    { name = "parakeet-mlx", specifier = ">=0.5.2" },
+    { name = "pipecat-ai", extras = ["local", "openai", "silero"], specifier = ">=1.6.0" },
+    { name = "setuptools", specifier = "<81" },
 ]
 
 [[package]]

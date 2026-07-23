@@ -1,4 +1,4 @@
-# clone2 — local voice agent in a cloned voice
+# parrotbox — local voice agent in a cloned voice
 
 A single-user voice agent that talks *as* a chosen persona, in a cloned voice,
 running locally on a Mac. Mic → Parakeet STT (MLX) → DeepSeek → Chatterbox-Turbo
