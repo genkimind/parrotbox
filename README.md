@@ -174,11 +174,13 @@ interface with three parts:
   mode), on screen. Voice speed moves to a live slider, so it isn't asked here.
 - **Conversation pane** — only what was said and what the agent spoke; no logs.
   (Logs are redirected to `logs/parrotbox-<timestamp>.log`.)
-- **Voice sliders** — Exaggeration, Temperature, CFG weight, and Speed,
+- **Voice sliders** — Exaggeration, Temperature, CFG weight, Speed, and Volume,
   adjustable *while talking*. Because Chatterbox takes these per synthesis call,
   a change is audible within a sentence. The sliders run to deliberately wide
   ceilings (well past the usual "safe" range) so there's headroom to push a
   voice hard — the upper reaches get extreme and can distort, which is the point.
+  Volume defaults to 1.0 (100%) and goes up to 1.5, a +50% overboost for when
+  full macOS volume still isn't loud enough (it hard-limits, so it distorts hot).
 
 Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it by 0.05 (`Shift` for a 0.50 jump),
 `t` types a line for the voice to speak, `m` mutes/unmutes the mic, `c` clears
@@ -197,10 +199,13 @@ model's context to just the system prompt, so nothing said earlier is
 remembered. Because that's destructive, it needs two presses — the first arms
 it (Esc or a 3-second pause cancels), the second confirms.
 
-Exaggeration is the emotion dial — raise it for a more excited, animated
-delivery (the default 0.5 is a touch livelier than neutral); past ~0.7 it
-speeds up and gets theatrical, and the high end of the slider goes further still.
-If it rushes at high exaggeration, raise CFG weight to slow the pacing back down.
+Exaggeration is the emotion dial and the main knob — it has the thickest bar and
+is marked "adjust this first." Raise it for a more excited, animated delivery
+(the default 0.5 is a touch livelier than neutral); past ~0.7 it speeds up and
+gets theatrical, and the high end of the slider goes further still. Temperature
+and CFG weight are the secondary trims (shown as thinner bars — same length, just
+lighter): if it rushes at high exaggeration, raise CFG weight to slow the pacing
+back down.
 
 ### Echo / headphones
 

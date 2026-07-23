@@ -113,6 +113,10 @@ class ChatterboxTTSService(TTSService):
             # out to the `rubberband` binary per chunk, so it only runs when the
             # speed slider is off 1.0.
             wav = pyrubberband.time_stretch(wav, self._model.sr, c.speed)
+        # Output gain last. Above 1.0 overboosts past what macOS volume alone
+        # gives; the clip below then hard-limits peaks (louder, distorts hot).
+        if c.volume != 1.0:
+            wav = wav * c.volume
         return (np.clip(wav, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:

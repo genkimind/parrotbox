@@ -20,25 +20,35 @@ class ParamSpec:
     hi: float
     step: float
     help: str
+    emphasis: str = "normal"  # "thin" | "normal" | "thick" — bar thickness (not length)
+    note: str = ""  # short inline hint shown after the value (e.g. "adjust this first")
 
 
 # Order here is the order shown in the TUI.
 PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec(
         "Exaggeration", "exaggeration", 0.0, 4.5, 0.05,
-        "emotion/intensity — higher is more excited and animated",
+        "adjust this first — emotion/intensity; higher is more excited and animated",
+        emphasis="thick",
+        note="◀ adjust this first",
     ),
     ParamSpec(
         "Temperature", "temperature", 0.1, 4.3, 0.05,
         "delivery variability — higher is livelier, less predictable",
+        emphasis="thin",
     ),
     ParamSpec(
         "CFG weight", "cfg_weight", 0.0, 3.0, 0.05,
         "pacing/adherence — lower is slower and more deliberate",
+        emphasis="thin",
     ),
     ParamSpec(
         "Speed", "speed", 0.5, 5.0, 0.05,
         "post-synth playback rate — above 1.0 is faster but can sound echoey",
+    ),
+    ParamSpec(
+        "Volume", "volume", 0.2, 1.5, 0.05,
+        "output loudness — 1.0 is 100%; up to 1.5 overboosts +50% (louder, clips hot)",
     ),
 )
 
@@ -51,6 +61,7 @@ class RuntimeControls:
     temperature: float = 0.8
     cfg_weight: float = 0.0
     speed: float = 1.0
+    volume: float = 1.0
 
     def snapshot(self) -> "RuntimeControls":
         """A detached copy — safe to read without racing a concurrent adjust."""

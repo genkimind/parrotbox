@@ -158,9 +158,17 @@ class ConvLine(Static):
 
 
 class ParamBar(Static):
-    """A labelled slider bound to one RuntimeControls field."""
+    """A labelled slider bound to one RuntimeControls field.
 
-    WIDTH = 18
+    Every bar is the same length; importance is shown by *thickness* — the
+    bar's glyph height (spec.emphasis), not its length. The filled fraction is
+    the bright portion, the remainder is dimmed. An optional spec.note is shown
+    after the value.
+    """
+
+    WIDTH = 20
+    # Bottom-aligned block glyphs of increasing height => increasing thickness.
+    THICKNESS = {"thin": "▂", "normal": "▄", "thick": "█"}
 
     def __init__(self, spec: ParamSpec, controls: RuntimeControls) -> None:
         super().__init__()
@@ -176,17 +184,27 @@ class ParamBar(Static):
         val = getattr(self.controls, self.spec.attr)
         frac = (val - self.spec.lo) / (self.spec.hi - self.spec.lo)
         filled = round(frac * self.WIDTH)
-        bar = "█" * filled + "░" * (self.WIDTH - filled)
+        glyph = self.THICKNESS.get(self.spec.emphasis, "▄")
         marker = "▸" if self._selected else " "
         name_style = "bold" if self._selected else "dim"
         bar_style = "green" if self._selected else "green3"
+        # One continuous bar of the emphasis glyph: bright = filled, dim = rest.
+        bar = f"[{bar_style}]{glyph * filled}[/][dim]{glyph * (self.WIDTH - filled)}[/]"
+        note = f" [b yellow]{self.spec.note}[/]" if self.spec.note else ""
         self.update(
             f"[{name_style}]{marker} {self.spec.label:<12}[/] "
-            f"[{bar_style}]{bar}[/] [b]{val:>4.2f}[/]"
+            f"{bar} [b]{val:>4.2f}[/]{note}"
         )
 
 
 class LiveScreen(Screen):
+    # Don't auto-focus any widget on mount: otherwise Textual grabs the first
+    # focusable one (the hidden type-box / boot-log pane) and it eats the arrow
+    # keys until the user pressed Escape. Must be "" (not None) — a None here
+    # falls back to the App's AUTO_FOCUS ("*"); "" disables it outright, so focus
+    # stays on the screen and the sliders respond immediately.
+    AUTO_FOCUS = ""
+
     CSS = """
     LiveScreen { layout: vertical; }
     #stage {
