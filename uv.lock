@@ -2198,6 +2198,7 @@ dependencies = [
     { name = "chatterbox-tts" },
     { name = "parakeet-mlx" },
     { name = "pipecat-ai", extra = ["local"] },
+    { name = "pyrubberband" },
     { name = "setuptools" },
     { name = "textual" },
 ]
@@ -2207,6 +2208,7 @@ requires-dist = [
     { name = "chatterbox-tts", specifier = ">=0.1.7" },
     { name = "parakeet-mlx", specifier = ">=0.5.2" },
     { name = "pipecat-ai", extras = ["local", "openai", "silero"], specifier = ">=1.6.0" },
+    { name = "pyrubberband", specifier = ">=0.4.0" },
     { name = "setuptools", specifier = "<81" },
     { name = "textual", specifier = ">=8.2.8" },
 ]
@@ -2620,6 +2622,19 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/23/00/f915eaa75326f4209941179c2b93ac477f2040e4aeff5bb21d16eb8058f9/pyloudnorm-0.2.0.tar.gz", hash = "sha256:8bf597658ea4e1975c275adf490f6deb5369ea409f2901f939915efa4b681b16", size = 14037, upload-time = "2026-01-04T11:43:35.265Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/aa/b6/65a49a05614b2548edbba3aab118f2ebe7441dfd778accdcdce9f6567f20/pyloudnorm-0.2.0-py3-none-any.whl", hash = "sha256:9bb69afb904f59d007a7f9ba3d75d16fb8aeef35c44d6df822a9f192d69cf13f", size = 10879, upload-time = "2026-01-04T11:43:34.534Z" },
+]
+
+[[package]]
+name = "pyrubberband"
+version = "0.4.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "soundfile" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/b4/5f/e4e737a216c9327931cdee8ca2194c916ee8a1748a8c7c80d5d5a8368d81/pyrubberband-0.4.0.tar.gz", hash = "sha256:74707ec8ca6c6234e84ad2d9a4aa5c08a62fcfd83da011d535d41f4388ac49f7", size = 6416, upload-time = "2024-09-30T17:53:00.796Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/88/238aa67e353012d8dd999372aedada3f627bc9895d5d2a5305e7ffb1affd/pyrubberband-0.4.0-py3-none-any.whl", hash = "sha256:0a803191f38debbbdfd9135939c1f75999e98511f19867d357b84e191f139ca9", size = 4798, upload-time = "2024-09-30T17:52:59.621Z" },
 ]
 
 [[package]]

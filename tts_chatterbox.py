@@ -105,9 +105,14 @@ class ChatterboxTTSService(TTSService):
         )
         wav = wav.squeeze().cpu().numpy()
         if c.speed != 1.0:
-            import librosa
+            import pyrubberband
 
-            wav = librosa.effects.time_stretch(wav, rate=c.speed)
+            # Rubber Band is a time-domain stretcher, so it doesn't smear phase
+            # the way librosa's phase vocoder did — no reverby/echoey artifact on
+            # voiced speech. rate > 1.0 speeds up (same sense as before). Shells
+            # out to the `rubberband` binary per chunk, so it only runs when the
+            # speed slider is off 1.0.
+            wav = pyrubberband.time_stretch(wav, self._model.sr, c.speed)
         return (np.clip(wav, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:

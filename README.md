@@ -22,9 +22,14 @@ Design and rationale: [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Setup
 
 ```bash
-brew install portaudio ffmpeg
+brew install portaudio ffmpeg rubberband
 uv sync
 ```
+
+(`rubberband` is the time-stretch engine used by the voice **Speed** control; a
+phase vocoder was replaced with it because it left voiced speech sounding
+echoey. Speed changes shell out to the `rubberband` binary, so it must be on
+your `PATH`.)
 
 ## Two things you must provide
 
