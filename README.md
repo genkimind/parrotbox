@@ -64,6 +64,12 @@ A persona has two parts that matter most:
   transcript fragments work far better than invented ones. Six to ten short,
   varied samples beat twenty long ones.
 
+  **Tip — capturing samples:** the easiest way to get natural samples is to just
+  talk and let something transcribe you. [Ghost Pepper](https://github.com/matthartman/ghost-pepper)
+  is a great on-device, local speech-to-text transcriber — highly recommended.
+  Just talk and it transcribes your words to text as you speak; paste those
+  transcripts straight into your Style samples.
+
 Keep the structural sections of the example file as-is (Interruptions, Rhythm and
 length, What not to do, The test) — those are what keep output speakable through
 text-to-speech, and are not persona-specific.
