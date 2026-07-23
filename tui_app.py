@@ -345,10 +345,10 @@ class LiveScreen(Screen):
         self._adjust(-1)
 
     def action_incr_big(self) -> None:
-        self._adjust(5)
+        self._adjust(10)
 
     def action_decr_big(self) -> None:
-        self._adjust(-5)
+        self._adjust(-10)
 
     def action_respond(self) -> None:
         if self._meeting:

@@ -25,19 +25,19 @@ class ParamSpec:
 # Order here is the order shown in the TUI.
 PARAM_SPECS: tuple[ParamSpec, ...] = (
     ParamSpec(
-        "Exaggeration", "exaggeration", 0.0, 1.5, 0.05,
+        "Exaggeration", "exaggeration", 0.0, 4.5, 0.05,
         "emotion/intensity — higher is more excited and animated",
     ),
     ParamSpec(
-        "Temperature", "temperature", 0.1, 1.5, 0.05,
+        "Temperature", "temperature", 0.1, 4.3, 0.05,
         "delivery variability — higher is livelier, less predictable",
     ),
     ParamSpec(
-        "CFG weight", "cfg_weight", 0.0, 1.0, 0.05,
+        "CFG weight", "cfg_weight", 0.0, 3.0, 0.05,
         "pacing/adherence — lower is slower and more deliberate",
     ),
     ParamSpec(
-        "Speed", "speed", 0.5, 2.0, 0.05,
+        "Speed", "speed", 0.5, 5.0, 0.05,
         "post-synth playback rate — above 1.0 is faster but can sound echoey",
     ),
 )

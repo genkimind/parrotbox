@@ -119,13 +119,22 @@ uv run python scripts/check_tts.py                 # TTS on MPS + RTF (gate: war
 
 ## Run
 
+**Recommended — the `--tui` Textual interface** (setup on screen, a clean
+conversation pane instead of log spam, and live voice sliders):
+
+```bash
+DEEPSEEK_API_KEY=... uv run python main.py --tui                  # recommended (see "TUI" below)
+DEEPSEEK_API_KEY=... uv run python main.py --tui daily standup    # scenario from argv, skips that prompt
+```
+
+Prefer a plain console? The classic CLI still works exactly as before:
+
 ```bash
 DEEPSEEK_API_KEY=... uv run python main.py                        # prompts for a scenario
 DEEPSEEK_API_KEY=... uv run python main.py daily scrum standup    # scenario from argv
-DEEPSEEK_API_KEY=... uv run python main.py --tui                  # Textual interface (see below)
 ```
 
-Startup asks four questions (enter accepts the default on each):
+In the classic CLI, startup asks four questions (enter accepts the default on each):
 
 1. **Scenario** — short context that shapes register and tone for the session
    ("scrum meeting", "chatting with a friend"); skipped if given on the command line
@@ -162,15 +171,17 @@ interface with three parts:
   (Logs are redirected to `logs/parrotbox-<timestamp>.log`.)
 - **Voice sliders** — Exaggeration, Temperature, CFG weight, and Speed,
   adjustable *while talking*. Because Chatterbox takes these per synthesis call,
-  a change is audible within a sentence.
+  a change is audible within a sentence. The sliders run to deliberately wide
+  ceilings (well past the usual "safe" range) so there's headroom to push a
+  voice hard — the upper reaches get extreme and can distort, which is the point.
 
-Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it (`Shift` for a bigger step),
+Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it by 0.05 (`Shift` for a 0.50 jump),
 `r` responds in meeting mode, `q` quits.
 
 Exaggeration is the emotion dial — raise it for a more excited, animated
 delivery (the default 0.5 is a touch livelier than neutral); past ~0.7 it
-speeds up and gets theatrical. If it rushes at high exaggeration, raise CFG
-weight to slow the pacing back down.
+speeds up and gets theatrical, and the high end of the slider goes further still.
+If it rushes at high exaggeration, raise CFG weight to slow the pacing back down.
 
 ### Echo / headphones
 

@@ -1,14 +1,15 @@
 """Local voice agent: mic → Parakeet STT → DeepSeek → Chatterbox clone → speaker.
 
-See ARCHITECTURE.md for the full design. Run with:
-
-    DEEPSEEK_API_KEY=... uv run python main.py
-
-Add --tui for the Textual interface: on-screen setup, a live conversation
-pane, and sliders for exaggeration/temperature/cfg_weight/speed that take
-effect mid-session. Logs go to logs/ instead of the console in that mode.
+See ARCHITECTURE.md for the full design. Recommended — the --tui Textual
+interface: on-screen setup, a live conversation pane, and sliders for
+exaggeration/temperature/cfg_weight/speed that take effect mid-session. Logs
+go to logs/ instead of the console in that mode.
 
     DEEPSEEK_API_KEY=... uv run python main.py --tui
+
+The classic console flow (prompts + log stream) still works without --tui:
+
+    DEEPSEEK_API_KEY=... uv run python main.py
 """
 
 import asyncio
