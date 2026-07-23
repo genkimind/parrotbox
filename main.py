@@ -343,14 +343,20 @@ async def run_tui():
     try:
         await app.run_async()
     finally:
-        # Stop the pipeline so its audio threads don't keep the process alive.
+        # Best-effort graceful stop, then hard-exit. The TTS ThreadPoolExecutor
+        # and sounddevice streams are non-daemon threads (a worker may be stuck
+        # inside an uninterruptible torch generate()), so once the UI is gone
+        # they'd keep the process alive forever. os._exit guarantees the app
+        # actually quits when you press 'q'.
         for runner in runners:
             try:
-                await runner.cancel()
+                await asyncio.wait_for(runner.cancel(), timeout=3)
             except Exception:
                 logger.exception("error cancelling runner on shutdown")
         for task in run_tasks:
             task.cancel()
+        logger.complete()  # flush the file sink before we exit hard
+        os._exit(0)
 
 
 async def main():

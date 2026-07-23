@@ -67,9 +67,10 @@ class ChatterboxTTSService(TTSService):
     def _load(self):
         from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-        from chatterbox_compat import apply_mps_float64_patch
+        from chatterbox_compat import apply_mps_float64_patch, neutralize_tqdm_mp_lock
 
         apply_mps_float64_patch()
+        neutralize_tqdm_mp_lock()  # else tqdm's mp-lock spawn crashes under the TUI
 
         t0 = time.monotonic()
         try:
