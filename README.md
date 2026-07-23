@@ -22,9 +22,14 @@ Design and rationale: [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Setup
 
 ```bash
-brew install portaudio ffmpeg
+brew install portaudio ffmpeg rubberband
 uv sync
 ```
+
+(`rubberband` is the time-stretch engine used by the voice **Speed** control; a
+phase vocoder was replaced with it because it left voiced speech sounding
+echoey. Speed changes shell out to the `rubberband` binary, so it must be on
+your `PATH`.)
 
 ## Two things you must provide
 
@@ -119,12 +124,22 @@ uv run python scripts/check_tts.py                 # TTS on MPS + RTF (gate: war
 
 ## Run
 
+The Textual interface (setup on screen, a clean conversation pane instead of log
+spam, and live voice sliders) is the **default** — see [TUI](#tui) below:
+
 ```bash
-DEEPSEEK_API_KEY=... uv run python main.py                        # prompts for a scenario
-DEEPSEEK_API_KEY=... uv run python main.py daily scrum standup    # scenario from argv
+DEEPSEEK_API_KEY=... uv run python main.py                       # Textual interface (default)
+DEEPSEEK_API_KEY=... uv run python main.py daily standup         # scenario from argv, skips that prompt
 ```
 
-Startup asks four questions (enter accepts the default on each):
+Prefer a plain console? Add `--console` for the classic prompts + log-stream flow:
+
+```bash
+DEEPSEEK_API_KEY=... uv run python main.py --console                       # prompts for a scenario
+DEEPSEEK_API_KEY=... uv run python main.py --console daily scrum standup   # scenario from argv
+```
+
+In the classic console flow, startup asks four questions (enter accepts the default on each):
 
 1. **Scenario** — short context that shapes register and tone for the session
    ("scrum meeting", "chatting with a friend"); skipped if given on the command line
@@ -136,7 +151,7 @@ Startup asks four questions (enter accepts the default on each):
 4. **Response mode** — live (replies after every turn, the default) or meeting
    (transcribes silently; press `r` to get one reply over everything heard so far)
 
-First start takes ~30s (model loads + MPS shader warmup).
+First start takes ~1 min (model loads + MPS shader warmup).
 
 ### Meeting mode
 
@@ -149,6 +164,48 @@ pressing `r` while the agent is talking queues the reply behind the current
 one. Half duplex + meeting works but mutes the mic while the agent talks, so
 meeting speech during a reply is lost — full duplex with headphones is the
 better meeting setup.
+
+### TUI
+
+The default interface is a [Textual](https://textual.textualize.io) app (pass
+`--console` to get the plain prompts + log stream instead). It has three parts:
+
+- **Setup screen** — the same four questions (scenario, mic mode, response
+  mode), on screen. Voice speed moves to a live slider, so it isn't asked here.
+- **Conversation pane** — only what was said and what the agent spoke; no logs.
+  (Logs are redirected to `logs/parrotbox-<timestamp>.log`.)
+- **Voice sliders** — Exaggeration, Temperature, CFG weight, Speed, and Volume,
+  adjustable *while talking*. Because Chatterbox takes these per synthesis call,
+  a change is audible within a sentence. The sliders run to deliberately wide
+  ceilings (well past the usual "safe" range) so there's headroom to push a
+  voice hard — the upper reaches get extreme and can distort, which is the point.
+  Volume defaults to 1.0 (100%) and goes up to 1.5, a +50% overboost for when
+  full macOS volume still isn't loud enough (it hard-limits, so it distorts hot).
+
+Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it by 0.05 (`Shift` for a 0.50 jump),
+`t` types a line for the voice to speak, `m` mutes/unmutes the mic, `c` clears
+the conversation (press twice to confirm), `r` responds in meeting mode, `q`
+quits.
+
+Press `t` to type a line and have the clone speak it verbatim (Enter sends, Esc
+cancels) — handy for saying something exact without going through the model. The
+typed line shows in the conversation pane and is added to the session's context,
+so the agent knows it said it for the rest of the run. It isn't saved between
+runs.
+
+`m` toggles mic mute — while muted the agent hears nothing (the header shows
+🔇 mic muted). `c` starts a fresh conversation: it clears the pane and resets the
+model's context to just the system prompt, so nothing said earlier is
+remembered. Because that's destructive, it needs two presses — the first arms
+it (Esc or a 3-second pause cancels), the second confirms.
+
+Exaggeration is the emotion dial and the main knob — it has the thickest bar and
+is marked "adjust this first." Raise it for a more excited, animated delivery
+(the default 0.5 is a touch livelier than neutral); past ~0.7 it speeds up and
+gets theatrical, and the high end of the slider goes further still. Temperature
+and CFG weight are the secondary trims (shown as thinner bars — same length, just
+lighter): if it rushes at high exaggeration, raise CFG weight to slow the pacing
+back down.
 
 ### Echo / headphones
 

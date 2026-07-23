@@ -1,8 +1,15 @@
 """Local voice agent: mic → Parakeet STT → DeepSeek → Chatterbox clone → speaker.
 
-See ARCHITECTURE.md for the full design. Run with:
+See ARCHITECTURE.md for the full design. The Textual interface is the default:
+on-screen setup, a live conversation pane, and sliders for
+exaggeration/temperature/cfg_weight/speed/volume that take effect mid-session.
+Logs go to logs/ instead of the console in that mode.
 
     DEEPSEEK_API_KEY=... uv run python main.py
+
+Add --console for the classic prompts + log-stream flow:
+
+    DEEPSEEK_API_KEY=... uv run python main.py --console
 """
 
 import asyncio
@@ -18,7 +25,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -37,8 +44,11 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from meeting_mode import MeetingGate, install_key_listener
+from mic_gate import MicGate
 from persona import build_system_prompt
+from runtime_controls import RuntimeControls
 from stt_parakeet import ParakeetMLXSTTService
+from transcript_tap import TranscriptTap
 from tts_chatterbox import ChatterboxTTSService
 from tts_normalize import TTSNormalizeFilter
 
@@ -56,9 +66,26 @@ class SessionConfig:
     meeting: bool = False
 
 
+@dataclass
+class BuiltPipeline:
+    """What build_pipeline hands back: the worker plus the live-control hooks."""
+
+    worker: PipelineWorker
+    meeting_gate: MeetingGate | None
+    mic_gate: MicGate
+    context: "LLMContext"
+    system_content: str  # the original system prompt, for clearing back to fresh
+
+
 def _device_index(env_name: str) -> int | None:
     value = os.environ.get(env_name)
     return int(value) if value else None
+
+
+def _scenario_from_argv() -> str | None:
+    """Command-line scenario words, ignoring flags like --console."""
+    words = [a for a in sys.argv[1:] if not a.startswith("-")]
+    return " ".join(words) or None
 
 
 def get_session_config() -> SessionConfig:
@@ -68,8 +95,9 @@ def get_session_config() -> SessionConfig:
     each default. Non-interactive runs (no tty) get the defaults.
     """
     config = SessionConfig()
-    if len(sys.argv) > 1:
-        config.scenario = " ".join(sys.argv[1:])
+    scenario = _scenario_from_argv()
+    if scenario:
+        config.scenario = scenario
     if not sys.stdin.isatty():
         return config
 
@@ -102,8 +130,16 @@ def get_session_config() -> SessionConfig:
     return config
 
 
-def build_pipeline(config: SessionConfig | None = None) -> tuple[PipelineWorker, MeetingGate | None]:
+def build_pipeline(
+    config: SessionConfig | None = None,
+    *,
+    controls: RuntimeControls | None = None,
+    bus=None,
+) -> BuiltPipeline:
     config = config or SessionConfig()
+    # Seed the live controls from the session's starting speed; the TUI mutates
+    # this same object in place while the pipeline runs.
+    controls = controls or RuntimeControls(speed=config.speed)
     transport = LocalAudioTransport(
         LocalAudioTransportParams(
             audio_in_enabled=True,
@@ -133,7 +169,7 @@ def build_pipeline(config: SessionConfig | None = None) -> tuple[PipelineWorker,
 
     tts = ChatterboxTTSService(
         reference_wav=REFERENCE_WAV,
-        speed=config.speed,
+        controls=controls,
         # Rewrites LLM output into speakable form ("..." would be spoken as
         # "dot dot dot") — filtered text is also what history records.
         text_filters=[TTSNormalizeFilter()],
@@ -145,14 +181,8 @@ def build_pipeline(config: SessionConfig | None = None) -> tuple[PipelineWorker,
     # mutes the mic while the bot talks — trade: no barge-in.
     mute_strategies = [AlwaysUserMuteStrategy()] if config.half_duplex else []
 
-    context = LLMContext(
-        messages=[
-            {
-                "role": "system",
-                "content": build_system_prompt(config.scenario, meeting=config.meeting),
-            }
-        ]
-    )
+    system_content = build_system_prompt(config.scenario, meeting=config.meeting)
+    context = LLMContext(messages=[{"role": "system", "content": system_content}])
     aggregators = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -180,13 +210,25 @@ def build_pipeline(config: SessionConfig | None = None) -> tuple[PipelineWorker,
     # (context still accumulates upstream of it); pressing 'r' releases one run.
     gate = MeetingGate() if config.meeting else None
 
+    # Optional transcript taps for the TUI: user text right after STT, bot text
+    # right after TTS. Pass-through processors, so they don't alter the flow.
+    user_tap = TranscriptTap(on_user=bus.user) if bus else None
+    bot_tap = TranscriptTap(on_bot=bus.bot) if bus else None
+
+    # Manual mic mute (TUI 'm'): drops input audio when muted. Right after the
+    # transport so STT and VAD go silent while muted. Unmuted by default.
+    mic_gate = MicGate()
+
     stages = [
         transport.input(),
+        mic_gate,
         stt,
+        *([user_tap] if user_tap else []),
         aggregators.user(),
         *([gate] if gate else []),
         llm,
         tts,
+        *([bot_tap] if bot_tap else []),
         transport.output(),
         # After output() on purpose: history records only text whose audio
         # actually played, so barge-in leaves an honest context behind.
@@ -198,10 +240,16 @@ def build_pipeline(config: SessionConfig | None = None) -> tuple[PipelineWorker,
         params=PipelineParams(enable_metrics=True),
         idle_timeout_secs=None,  # personal always-on session; never self-cancel
     )
-    return worker, gate
+    return BuiltPipeline(
+        worker=worker,
+        meeting_gate=gate,
+        mic_gate=mic_gate,
+        context=context,
+        system_content=system_content,
+    )
 
 
-async def main():
+def _check_prerequisites():
     if not os.environ.get("DEEPSEEK_API_KEY"):
         logger.error("DEEPSEEK_API_KEY is not set")
         sys.exit(1)
@@ -212,35 +260,181 @@ async def main():
         )
         sys.exit(1)
 
+
+def _make_respond(gate: MeetingGate | None, worker: PipelineWorker):
+    """A press-'r' handler for meeting mode: release one held reply."""
+
+    def on_r():
+        if gate is None:
+            return
+        if gate.held == 0:
+            logger.info("meeting mode: nothing new since last reply")
+            return
+        gate.arm()
+        asyncio.ensure_future(worker.queue_frame(LLMRunFrame()))
+
+    return on_r
+
+
+def _make_speak(worker: PipelineWorker):
+    """A handler for the TUI's 'type to speak' (T): say a typed line verbatim.
+
+    A TTSSpeakFrame is synthesized directly by the TTS (bypassing the LLM) and,
+    because pipecat marks it append_to_context, the assistant aggregator records
+    it — so within the session the bot knows it said it, and it shows in the
+    conversation pane like any spoken line.
+    """
+
+    def speak(text: str):
+        text = text.strip()
+        if not text:
+            return
+        asyncio.ensure_future(worker.queue_frame(TTSSpeakFrame(text)))
+
+    return speak
+
+
+def _make_mute_toggle(mic_gate: MicGate):
+    """A toggle for the TUI 'm' key; returns the new muted state to display."""
+
+    def toggle() -> bool:
+        muted = mic_gate.toggle()
+        logger.info("mic {}", "muted" if muted else "unmuted")
+        return muted
+
+    return toggle
+
+
+def _make_clear(context: "LLMContext", system_content: str):
+    """Reset the conversation to a fresh context (system prompt only) for the TUI 'c' key.
+
+    Runs on the pipeline's own event loop (same loop as the TUI), so replacing
+    the shared context's messages doesn't race the aggregators.
+    """
+
+    def clear():
+        context.set_messages([{"role": "system", "content": system_content}])
+        logger.info("conversation context cleared")
+
+    return clear
+
+
+async def run_cli():
     config = get_session_config()
     logger.info(
         f"Session: scenario={config.scenario or '(none)'} speed={config.speed} "
         f"mode={'half' if config.half_duplex else 'full'}-duplex"
     )
 
-    worker, gate = build_pipeline(config)
+    built = build_pipeline(config)
+    worker, gate = built.worker, built.meeting_gate
     runner = WorkerRunner(handle_sigint=True)
     await runner.add_workers(worker)
 
     restore = None
     if gate and sys.stdin.isatty():
-
-        def on_r():
-            if gate.held == 0:
-                logger.info("meeting mode: nothing new since last reply")
-                return
-            gate.arm()
-            asyncio.ensure_future(worker.queue_frame(LLMRunFrame()))
-
-        restore = install_key_listener(asyncio.get_running_loop(), on_r)
+        restore = install_key_listener(asyncio.get_running_loop(), _make_respond(gate, worker))
         logger.info("Meeting mode: agent holds replies — press 'r' to respond")
 
-    logger.info("Starting voice agent — models load on first frame, give it ~15s")
+    logger.info("Starting voice agent — models load on first frame, give it ~1 min")
     try:
         await runner.run()
     finally:
         if restore:
             restore()
+
+
+async def run_tui():
+    import queue
+    from datetime import datetime
+
+    from tui_app import ParrotboxApp, SessionHandles, SessionSetup, TranscriptBus
+
+    # The TUI owns the screen, so logs never go to stderr. Two sinks: a
+    # persistent file, and a DEBUG queue the boot screen tails during startup
+    # (so the loading logs land in the conversation box) until the pipeline is
+    # ready, at which point on_ready() detaches it.
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    logfile = logs_dir / f"parrotbox-{datetime.now():%Y%m%d-%H%M%S}.log"
+    logger.remove()
+    logger.add(str(logfile), level="INFO")
+
+    log_queue: queue.Queue[str] = queue.Queue()
+    boot_sink_id = logger.add(
+        lambda msg: log_queue.put(str(msg)),
+        level="DEBUG",
+        format="{time:HH:mm:ss} | {level: <7} | {message}",
+    )
+
+    def on_ready():
+        try:
+            logger.remove(boot_sink_id)
+        except ValueError:
+            pass  # already removed
+
+    logger.info("TUI session starting; logs go here instead of the console")
+
+    controls = RuntimeControls()
+    bus = TranscriptBus()
+    runners: list[WorkerRunner] = []
+    run_tasks: list[asyncio.Task] = []
+
+    async def start_session(setup: SessionSetup):
+        config = SessionConfig(
+            scenario=setup.scenario,
+            half_duplex=setup.half_duplex,
+            meeting=setup.meeting,
+        )
+        logger.info(f"Session: {config}")
+        built = build_pipeline(config, controls=controls, bus=bus)
+        worker = built.worker
+        runner = WorkerRunner(handle_sigint=False)  # Textual owns the keyboard
+        await runner.add_workers(worker)
+        runners.append(runner)
+        run_tasks.append(asyncio.create_task(runner.run()))
+        return SessionHandles(
+            respond=_make_respond(built.meeting_gate, worker),
+            speak=_make_speak(worker),
+            mute_toggle=_make_mute_toggle(built.mic_gate),
+            clear=_make_clear(built.context, built.system_content),
+        )
+
+    app = ParrotboxApp(
+        controls=controls,
+        bus=bus,
+        scenario_default=_scenario_from_argv(),
+        start_session=start_session,
+        log_queue=log_queue,
+        on_ready=on_ready,
+    )
+    try:
+        await app.run_async()
+    finally:
+        # Best-effort graceful stop, then hard-exit. The TTS ThreadPoolExecutor
+        # and sounddevice streams are non-daemon threads (a worker may be stuck
+        # inside an uninterruptible torch generate()), so once the UI is gone
+        # they'd keep the process alive forever. os._exit guarantees the app
+        # actually quits when you press 'q'.
+        for runner in runners:
+            try:
+                await asyncio.wait_for(runner.cancel(), timeout=3)
+            except Exception:
+                logger.exception("error cancelling runner on shutdown")
+        for task in run_tasks:
+            task.cancel()
+        logger.complete()  # flush the file sink before we exit hard
+        os._exit(0)
+
+
+async def main():
+    _check_prerequisites()
+    # The Textual TUI is the default; --console opts into the classic
+    # prompts + log-stream flow. (--tui is still accepted as an explicit no-op.)
+    if "--console" in sys.argv:
+        await run_cli()
+    else:
+        await run_tui()
 
 
 if __name__ == "__main__":

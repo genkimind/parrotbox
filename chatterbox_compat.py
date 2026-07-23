@@ -30,3 +30,23 @@ def apply_mps_float64_patch():
 
     norm_loudness_f32._f32_patched = True
     ChatterboxTurboTTS.norm_loudness = norm_loudness_f32
+
+
+def neutralize_tqdm_mp_lock():
+    """Stop tqdm from creating a multiprocessing lock.
+
+    Chatterbox drives generation with `tqdm(range(...))`, and tqdm.__new__
+    acquires a shared lock — building a multiprocessing RLock the first time,
+    *even when the bar is disabled* (we set TQDM_DISABLE=1). Creating that lock
+    spawns a resource_tracker subprocess. Under the Textual TUI, stdout's file
+    descriptor has been replaced, so the spawn inherits an invalid fd (-1) and
+    dies with "bad value(s) in fds_to_keep", taking TTS down with it.
+
+    Forcing tqdm to use a plain threading lock avoids the subprocess entirely.
+    Harmless outside the TUI (the bar is disabled either way).
+    """
+    import threading
+
+    from tqdm.std import tqdm as std_tqdm
+
+    std_tqdm.set_lock(threading.RLock())

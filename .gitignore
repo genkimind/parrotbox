@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 scratch_tts_check/
 scratch_clone_eval/
+logs/
 .env
 .DS_Store
 persona.local.md
