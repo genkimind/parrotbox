@@ -181,7 +181,21 @@ interface with three parts:
   voice hard — the upper reaches get extreme and can distort, which is the point.
 
 Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it by 0.05 (`Shift` for a 0.50 jump),
-`r` responds in meeting mode, `q` quits.
+`t` types a line for the voice to speak, `m` mutes/unmutes the mic, `c` clears
+the conversation (press twice to confirm), `r` responds in meeting mode, `q`
+quits.
+
+Press `t` to type a line and have the clone speak it verbatim (Enter sends, Esc
+cancels) — handy for saying something exact without going through the model. The
+typed line shows in the conversation pane and is added to the session's context,
+so the agent knows it said it for the rest of the run. It isn't saved between
+runs.
+
+`m` toggles mic mute — while muted the agent hears nothing (the header shows
+🔇 mic muted). `c` starts a fresh conversation: it clears the pane and resets the
+model's context to just the system prompt, so nothing said earlier is
+remembered. Because that's destructive, it needs two presses — the first arms
+it (Esc or a 3-second pause cancels), the second confirms.
 
 Exaggeration is the emotion dial — raise it for a more excited, animated
 delivery (the default 0.5 is a touch livelier than neutral); past ~0.7 it

@@ -61,6 +61,16 @@ class SessionSetup:
     meeting: bool
 
 
+@dataclass
+class SessionHandles:
+    """Callbacks the running pipeline hands back to the live screen."""
+
+    respond: Callable[[], None]  # meeting mode: release one held reply ('r')
+    speak: Callable[[str], None]  # say a typed line verbatim ('t')
+    mute_toggle: Callable[[], bool]  # toggle mic mute ('m'); returns new muted state
+    clear: Callable[[], None]  # reset conversation to a fresh context ('c')
+
+
 # --------------------------------------------------------------------------- #
 # Setup screen — the old interactive prompts, now on-screen.
 # --------------------------------------------------------------------------- #
@@ -189,6 +199,7 @@ class LiveScreen(Screen):
         height: auto; border: round $secondary; padding: 0 1; margin: 0 1 1 1;
     }
     #controls-title { text-style: bold; color: $text-muted; }
+    #speakbox { margin: 0 1; border: round $accent; }
     #status { height: 1; padding: 0 2; color: $text-muted; }
     ParamBar { height: 1; }
     ConvLine { height: auto; margin-bottom: 1; }
@@ -201,8 +212,12 @@ class LiveScreen(Screen):
         ("right", "incr", "+"),
         ("shift+left", "decr_big", ""),
         ("shift+right", "incr_big", ""),
+        ("t", "type_message", "Type"),
+        ("m", "mute", "Mute"),
+        ("c", "clear", "Clear"),
         ("r", "respond", "Respond"),
         ("q", "quit", "Quit"),
+        ("escape", "cancel_type", ""),
     ]
 
     def __init__(
@@ -211,6 +226,9 @@ class LiveScreen(Screen):
         bus: TranscriptBus,
         meeting: bool,
         on_respond: Callable[[], None],
+        on_speak: Callable[[str], None],
+        on_mute_toggle: Callable[[], bool],
+        on_clear: Callable[[], None],
         log_queue: queue.Queue[str],
         on_ready: Callable[[], None],
     ) -> None:
@@ -219,6 +237,9 @@ class LiveScreen(Screen):
         self._bus = bus
         self._meeting = meeting
         self._on_respond = on_respond
+        self._on_speak = on_speak
+        self._on_mute_toggle = on_mute_toggle
+        self._on_clear = on_clear
         self._log_queue = log_queue
         self._on_ready = on_ready
         self._bars: list[ParamBar] = []
@@ -228,6 +249,9 @@ class LiveScreen(Screen):
         self._log_timer = None
         self._ready = False  # readiness marker seen
         self._live = False  # boot log replaced by transcript
+        self._muted = False
+        self._clear_armed = False  # first 'c' press seen, waiting for confirm
+        self._clear_timer = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -240,12 +264,17 @@ class LiveScreen(Screen):
                 bar = ParamBar(spec, self._controls)
                 self._bars.append(bar)
                 yield bar
+        yield Input(
+            placeholder="Type a line for the voice to speak — Enter to send, Esc to cancel",
+            id="speakbox",
+            classes="hidden",
+        )
         yield Static(self._status_text(), id="status")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "parrotbox"
-        self.sub_title = "meeting mode" if self._meeting else "live"
+        self._refresh_subtitle()
         # The log/conversation panes are scrollable and would otherwise grab
         # focus and eat the arrow keys — keep focus on the screen so ←/→/↑/↓
         # always drive the sliders.
@@ -302,6 +331,14 @@ class LiveScreen(Screen):
     def _refresh_status(self) -> None:
         self.query_one("#status", Static).update(self._status_text())
 
+    def _flash_status(self, message: str) -> None:
+        """Show a transient message on the status line (restored by _refresh_status)."""
+        self.query_one("#status", Static).update(message)
+
+    def _refresh_subtitle(self) -> None:
+        base = "meeting mode" if self._meeting else "live"
+        self.sub_title = f"{base} · 🔇 mic muted" if self._muted else base
+
     # -- transcript streaming ------------------------------------------------ #
 
     async def _drain(self) -> None:
@@ -354,6 +391,70 @@ class LiveScreen(Screen):
         if self._meeting:
             self._on_respond()
 
+    # -- type to speak ------------------------------------------------------- #
+
+    def action_type_message(self) -> None:
+        # Only once the pipeline is live (the TTS is loaded); ignored during boot.
+        if not self._live:
+            return
+        box = self.query_one("#speakbox", Input)
+        box.remove_class("hidden")
+        box.focus()  # takes the keyboard, so letters/arrows type instead of driving sliders
+
+    def action_cancel_type(self) -> None:
+        self._disarm_clear()  # Esc also backs out of a pending clear confirmation
+        self._close_speakbox()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "speakbox":
+            return
+        text = event.value.strip()
+        if text:
+            self._on_speak(text)
+        self._close_speakbox()
+
+    def _close_speakbox(self) -> None:
+        box = self.query_one("#speakbox", Input)
+        box.value = ""
+        box.add_class("hidden")
+        # Hand focus back to the screen so ←/→/↑/↓ drive the sliders again.
+        self.set_focus(None)
+
+    # -- mic mute ------------------------------------------------------------ #
+
+    def action_mute(self) -> None:
+        if not self._live:
+            return
+        self._muted = self._on_mute_toggle()
+        self._refresh_subtitle()
+        self._flash_status("🔇 mic muted" if self._muted else "🎙 mic live")
+
+    # -- clear context (double-press) ---------------------------------------- #
+
+    def action_clear(self) -> None:
+        if not self._live:
+            return
+        if not self._clear_armed:
+            self._clear_armed = True
+            self._flash_status("clear conversation? press c again to confirm (Esc cancels)")
+            self._clear_timer = self.set_timer(3.0, self._disarm_clear)
+            return
+        # Second press: confirmed.
+        self._disarm_clear()
+        self._on_clear()
+        convo = self.query_one("#conversation", VerticalScroll)
+        convo.remove_children()
+        self._current_bot = None
+        self._flash_status("conversation cleared — fresh context")
+
+    def _disarm_clear(self) -> None:
+        if self._clear_timer is not None:
+            self._clear_timer.stop()
+            self._clear_timer = None
+        if self._clear_armed:
+            self._clear_armed = False
+            self._refresh_status()
+
     def action_quit(self) -> None:
         # Screen-level bindings resolve actions against the screen, so a bare
         # "quit" never reaches App.action_quit — hand off explicitly.
@@ -376,7 +477,7 @@ class ParrotboxApp(App):
         controls: RuntimeControls,
         bus: TranscriptBus,
         scenario_default: str | None,
-        start_session: Callable[[SessionSetup], Awaitable[Callable[[], None]]],
+        start_session: Callable[[SessionSetup], Awaitable[SessionHandles]],
         log_queue: queue.Queue[str],
         on_ready: Callable[[], None],
     ) -> None:
@@ -397,13 +498,16 @@ class ParrotboxApp(App):
         self.run_worker(self._launch(setup), exclusive=True)
 
     async def _launch(self, setup: SessionSetup) -> None:
-        on_respond = await self._start_session(setup)
+        handles = await self._start_session(setup)
         await self.switch_screen(
             LiveScreen(
                 self._controls,
                 self._bus,
                 setup.meeting,
-                on_respond,
+                handles.respond,
+                handles.speak,
+                handles.mute_toggle,
+                handles.clear,
                 self._log_queue,
                 self._on_ready,
             )

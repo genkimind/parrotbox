@@ -25,7 +25,7 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
 from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
@@ -44,6 +44,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from meeting_mode import MeetingGate, install_key_listener
+from mic_gate import MicGate
 from persona import build_system_prompt
 from runtime_controls import RuntimeControls
 from stt_parakeet import ParakeetMLXSTTService
@@ -63,6 +64,17 @@ class SessionConfig:
     speed: float = DEFAULT_SPEED
     half_duplex: bool = False
     meeting: bool = False
+
+
+@dataclass
+class BuiltPipeline:
+    """What build_pipeline hands back: the worker plus the live-control hooks."""
+
+    worker: PipelineWorker
+    meeting_gate: MeetingGate | None
+    mic_gate: MicGate
+    context: "LLMContext"
+    system_content: str  # the original system prompt, for clearing back to fresh
 
 
 def _device_index(env_name: str) -> int | None:
@@ -123,7 +135,7 @@ def build_pipeline(
     *,
     controls: RuntimeControls | None = None,
     bus=None,
-) -> tuple[PipelineWorker, MeetingGate | None]:
+) -> BuiltPipeline:
     config = config or SessionConfig()
     # Seed the live controls from the session's starting speed; the TUI mutates
     # this same object in place while the pipeline runs.
@@ -169,14 +181,8 @@ def build_pipeline(
     # mutes the mic while the bot talks — trade: no barge-in.
     mute_strategies = [AlwaysUserMuteStrategy()] if config.half_duplex else []
 
-    context = LLMContext(
-        messages=[
-            {
-                "role": "system",
-                "content": build_system_prompt(config.scenario, meeting=config.meeting),
-            }
-        ]
-    )
+    system_content = build_system_prompt(config.scenario, meeting=config.meeting)
+    context = LLMContext(messages=[{"role": "system", "content": system_content}])
     aggregators = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -209,8 +215,13 @@ def build_pipeline(
     user_tap = TranscriptTap(on_user=bus.user) if bus else None
     bot_tap = TranscriptTap(on_bot=bus.bot) if bus else None
 
+    # Manual mic mute (TUI 'm'): drops input audio when muted. Right after the
+    # transport so STT and VAD go silent while muted. Unmuted by default.
+    mic_gate = MicGate()
+
     stages = [
         transport.input(),
+        mic_gate,
         stt,
         *([user_tap] if user_tap else []),
         aggregators.user(),
@@ -229,7 +240,13 @@ def build_pipeline(
         params=PipelineParams(enable_metrics=True),
         idle_timeout_secs=None,  # personal always-on session; never self-cancel
     )
-    return worker, gate
+    return BuiltPipeline(
+        worker=worker,
+        meeting_gate=gate,
+        mic_gate=mic_gate,
+        context=context,
+        system_content=system_content,
+    )
 
 
 def _check_prerequisites():
@@ -259,6 +276,49 @@ def _make_respond(gate: MeetingGate | None, worker: PipelineWorker):
     return on_r
 
 
+def _make_speak(worker: PipelineWorker):
+    """A handler for the TUI's 'type to speak' (T): say a typed line verbatim.
+
+    A TTSSpeakFrame is synthesized directly by the TTS (bypassing the LLM) and,
+    because pipecat marks it append_to_context, the assistant aggregator records
+    it — so within the session the bot knows it said it, and it shows in the
+    conversation pane like any spoken line.
+    """
+
+    def speak(text: str):
+        text = text.strip()
+        if not text:
+            return
+        asyncio.ensure_future(worker.queue_frame(TTSSpeakFrame(text)))
+
+    return speak
+
+
+def _make_mute_toggle(mic_gate: MicGate):
+    """A toggle for the TUI 'm' key; returns the new muted state to display."""
+
+    def toggle() -> bool:
+        muted = mic_gate.toggle()
+        logger.info("mic {}", "muted" if muted else "unmuted")
+        return muted
+
+    return toggle
+
+
+def _make_clear(context: "LLMContext", system_content: str):
+    """Reset the conversation to a fresh context (system prompt only) for the TUI 'c' key.
+
+    Runs on the pipeline's own event loop (same loop as the TUI), so replacing
+    the shared context's messages doesn't race the aggregators.
+    """
+
+    def clear():
+        context.set_messages([{"role": "system", "content": system_content}])
+        logger.info("conversation context cleared")
+
+    return clear
+
+
 async def run_cli():
     config = get_session_config()
     logger.info(
@@ -266,7 +326,8 @@ async def run_cli():
         f"mode={'half' if config.half_duplex else 'full'}-duplex"
     )
 
-    worker, gate = build_pipeline(config)
+    built = build_pipeline(config)
+    worker, gate = built.worker, built.meeting_gate
     runner = WorkerRunner(handle_sigint=True)
     await runner.add_workers(worker)
 
@@ -287,7 +348,7 @@ async def run_tui():
     import queue
     from datetime import datetime
 
-    from tui_app import ParrotboxApp, SessionSetup, TranscriptBus
+    from tui_app import ParrotboxApp, SessionHandles, SessionSetup, TranscriptBus
 
     # The TUI owns the screen, so logs never go to stderr. Two sinks: a
     # persistent file, and a DEBUG queue the boot screen tails during startup
@@ -326,12 +387,18 @@ async def run_tui():
             meeting=setup.meeting,
         )
         logger.info(f"Session: {config}")
-        worker, gate = build_pipeline(config, controls=controls, bus=bus)
+        built = build_pipeline(config, controls=controls, bus=bus)
+        worker = built.worker
         runner = WorkerRunner(handle_sigint=False)  # Textual owns the keyboard
         await runner.add_workers(worker)
         runners.append(runner)
         run_tasks.append(asyncio.create_task(runner.run()))
-        return _make_respond(gate, worker)
+        return SessionHandles(
+            respond=_make_respond(built.meeting_gate, worker),
+            speak=_make_speak(worker),
+            mute_toggle=_make_mute_toggle(built.mic_gate),
+            clear=_make_clear(built.context, built.system_content),
+        )
 
     app = ParrotboxApp(
         controls=controls,
