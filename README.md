@@ -38,10 +38,21 @@ for you to supply:
 
 ### 1. Write the persona
 
-The system prompt lives entirely in [`persona.md`](persona.md) — it is loaded at
-startup and never touched by code. The file that ships here is a clearly-marked
-**example** (a fictional woodworker named Robin Vale) that demonstrates the
-format. Replace it with your own.
+The system prompt is loaded from a persona markdown file at startup and never
+touched by code. The file that ships here, [`persona.md`](persona.md), is a
+clearly-marked **example** (a fictional woodworker named Robin Vale) that
+demonstrates the format.
+
+**To use your own persona without committing it, put it in `persona.local.md`.**
+That filename is gitignored, so your real persona stays on your machine and is
+never pushed; the code prefers it over the example when present. This lets you
+track this repo directly (pull code updates, push fixes) while keeping your
+identity — and your `voice_ref/` recording, also gitignored — entirely local. No
+second copy to maintain.
+
+```bash
+cp persona.md persona.local.md   # then edit persona.local.md with your own persona
+```
 
 A persona has two parts that matter most:
 

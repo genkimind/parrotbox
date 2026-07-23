@@ -1,4 +1,8 @@
-"""Loads the system prompt from persona.md — edit that file, not this one.
+"""Loads the system prompt from the persona file.
+
+Put your own persona in `persona.local.md` (gitignored — it stays on your
+machine and is never committed). If that file is absent, the tracked example
+`persona.md` is used instead. Edit the markdown, not this module.
 
 The scenario section is appended at the END so the persona block stays
 byte-identical across sessions: DeepSeek's prefix cache keys on the stable
@@ -7,7 +11,14 @@ prefix, making the resent prompt near-free after turn one.
 
 from pathlib import Path
 
-PERSONA_FILE = Path(__file__).resolve().parent / "persona.md"
+_HERE = Path(__file__).resolve().parent
+PERSONA_FILE = _HERE / "persona.md"           # tracked example, safe to publish
+LOCAL_PERSONA_FILE = _HERE / "persona.local.md"  # your real persona, gitignored
+
+
+def persona_path() -> Path:
+    """Your local persona if present, else the shipped example."""
+    return LOCAL_PERSONA_FILE if LOCAL_PERSONA_FILE.exists() else PERSONA_FILE
 
 SCENARIO_TEMPLATE = """
 
@@ -33,7 +44,7 @@ resolved themselves in the discussion."""
 
 
 def build_system_prompt(scenario: str | None = None, meeting: bool = False) -> str:
-    prompt = PERSONA_FILE.read_text(encoding="utf-8").strip()
+    prompt = persona_path().read_text(encoding="utf-8").strip()
     if scenario and scenario.strip():
         prompt += SCENARIO_TEMPLATE.format(scenario=scenario.strip())
     if meeting:
