@@ -274,7 +274,7 @@ async def run_cli():
         restore = install_key_listener(asyncio.get_running_loop(), _make_respond(gate, worker))
         logger.info("Meeting mode: agent holds replies — press 'r' to respond")
 
-    logger.info("Starting voice agent — models load on first frame, give it ~15s")
+    logger.info("Starting voice agent — models load on first frame, give it ~1 min")
     try:
         await runner.run()
     finally:
@@ -283,20 +283,39 @@ async def run_cli():
 
 
 async def run_tui():
+    import queue
     from datetime import datetime
 
     from tui_app import ParrotboxApp, SessionSetup, TranscriptBus
 
-    # The TUI owns the screen, so send logs to a file instead of stderr.
+    # The TUI owns the screen, so logs never go to stderr. Two sinks: a
+    # persistent file, and a DEBUG queue the boot screen tails during startup
+    # (so the loading logs land in the conversation box) until the pipeline is
+    # ready, at which point on_ready() detaches it.
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
     logfile = logs_dir / f"parrotbox-{datetime.now():%Y%m%d-%H%M%S}.log"
     logger.remove()
     logger.add(str(logfile), level="INFO")
+
+    log_queue: queue.Queue[str] = queue.Queue()
+    boot_sink_id = logger.add(
+        lambda msg: log_queue.put(str(msg)),
+        level="DEBUG",
+        format="{time:HH:mm:ss} | {level: <7} | {message}",
+    )
+
+    def on_ready():
+        try:
+            logger.remove(boot_sink_id)
+        except ValueError:
+            pass  # already removed
+
     logger.info("TUI session starting; logs go here instead of the console")
 
     controls = RuntimeControls()
     bus = TranscriptBus()
+    runners: list[WorkerRunner] = []
     run_tasks: list[asyncio.Task] = []
 
     async def start_session(setup: SessionSetup):
@@ -309,6 +328,7 @@ async def run_tui():
         worker, gate = build_pipeline(config, controls=controls, bus=bus)
         runner = WorkerRunner(handle_sigint=False)  # Textual owns the keyboard
         await runner.add_workers(worker)
+        runners.append(runner)
         run_tasks.append(asyncio.create_task(runner.run()))
         return _make_respond(gate, worker)
 
@@ -317,10 +337,18 @@ async def run_tui():
         bus=bus,
         scenario_default=_scenario_from_argv(),
         start_session=start_session,
+        log_queue=log_queue,
+        on_ready=on_ready,
     )
     try:
         await app.run_async()
     finally:
+        # Stop the pipeline so its audio threads don't keep the process alive.
+        for runner in runners:
+            try:
+                await runner.cancel()
+            except Exception:
+                logger.exception("error cancelling runner on shutdown")
         for task in run_tasks:
             task.cancel()
 

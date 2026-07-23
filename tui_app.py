@@ -11,6 +11,7 @@ within a sentence.
 from __future__ import annotations
 
 import asyncio
+import queue
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -24,8 +25,14 @@ from textual.widgets import (
     Input,
     RadioButton,
     RadioSet,
+    RichLog,
     Static,
 )
+
+# Emitted (at DEBUG) by pipecat when the StartFrame reaches the end of the
+# pipeline — i.e. every model is loaded and warm. We watch the log stream for
+# it to flip the TUI from "booting" to "live".
+READY_MARKER = "pipeline is now ready"
 
 from runtime_controls import PARAM_SPECS, ParamSpec, RuntimeControls
 
@@ -172,9 +179,12 @@ class ParamBar(Static):
 class LiveScreen(Screen):
     CSS = """
     LiveScreen { layout: vertical; }
-    #conversation {
+    #stage {
         height: 1fr; border: round $primary; padding: 0 1; margin: 0 1;
     }
+    #bootlog { height: 1fr; }
+    #conversation { height: 1fr; }
+    .hidden { display: none; }
     #controls-panel {
         height: auto; border: round $secondary; padding: 0 1; margin: 0 1 1 1;
     }
@@ -201,20 +211,29 @@ class LiveScreen(Screen):
         bus: TranscriptBus,
         meeting: bool,
         on_respond: Callable[[], None],
+        log_queue: queue.Queue[str],
+        on_ready: Callable[[], None],
     ) -> None:
         super().__init__()
         self._controls = controls
         self._bus = bus
         self._meeting = meeting
         self._on_respond = on_respond
+        self._log_queue = log_queue
+        self._on_ready = on_ready
         self._bars: list[ParamBar] = []
         self._selected = 0
         self._current_bot: ConvLine | None = None
         self._drain_task: asyncio.Task | None = None
+        self._log_timer = None
+        self._ready = False  # readiness marker seen
+        self._live = False  # boot log replaced by transcript
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield VerticalScroll(id="conversation")
+        with Container(id="stage"):
+            yield RichLog(id="bootlog", wrap=True, markup=True, auto_scroll=True, max_lines=1000)
+            yield VerticalScroll(id="conversation", classes="hidden")
         with Container(id="controls-panel"):
             yield Static("Voice controls", id="controls-title")
             for spec in PARAM_SPECS:
@@ -227,18 +246,58 @@ class LiveScreen(Screen):
     def on_mount(self) -> None:
         self.title = "parrotbox"
         self.sub_title = "meeting mode" if self._meeting else "live"
+        # The log/conversation panes are scrollable and would otherwise grab
+        # focus and eat the arrow keys — keep focus on the screen so ←/→/↑/↓
+        # always drive the sliders.
+        self.query_one("#bootlog", RichLog).can_focus = False
+        self.query_one("#conversation", VerticalScroll).can_focus = False
+        self.set_focus(None)
         for i, bar in enumerate(self._bars):
             bar.set_selected(i == self._selected)
+        self.query_one("#bootlog", RichLog).write("[dim]loading models — first run takes ~1 min…[/]")
+        self._log_timer = self.set_interval(0.1, self._pump_logs)
         self._drain_task = asyncio.create_task(self._drain())
 
     def on_unmount(self) -> None:
         if self._drain_task:
             self._drain_task.cancel()
 
+    # -- boot log -> ready transition ---------------------------------------- #
+
+    def _pump_logs(self) -> None:
+        log = self.query_one("#bootlog", RichLog)
+        while True:
+            try:
+                line = self._log_queue.get_nowait()
+            except queue.Empty:
+                break
+            line = line.rstrip("\n")
+            if not self._live:
+                log.write(line)
+            if not self._ready and READY_MARKER in line:
+                self._on_ready_detected()
+
+    def _on_ready_detected(self) -> None:
+        self._ready = True
+        self._on_ready()  # detach the boot-log sink so debug spam stops
+        log = self.query_one("#bootlog", RichLog)
+        log.write("")
+        log.write("[bold green]  ✓ Loaded![/]")
+        self.set_timer(3.0, self._go_live)
+
+    def _go_live(self) -> None:
+        self._live = True
+        if self._log_timer:
+            self._log_timer.stop()
+        self.query_one("#bootlog", RichLog).add_class("hidden")
+        self.query_one("#conversation", VerticalScroll).remove_class("hidden")
+        self._refresh_status()
+
     def _status_text(self) -> str:
+        if not self._live:
+            return "loading models — first run takes ~1 min…"
         spec = PARAM_SPECS[self._selected]
-        base = "models load on first speech (~15s) — then just talk  ·  "
-        return f"{base}{spec.label}: {spec.help}"
+        return f"{spec.label}: {spec.help}"
 
     def _refresh_status(self) -> None:
         self.query_one("#status", Static).update(self._status_text())
@@ -295,6 +354,11 @@ class LiveScreen(Screen):
         if self._meeting:
             self._on_respond()
 
+    def action_quit(self) -> None:
+        # Screen-level bindings resolve actions against the screen, so a bare
+        # "quit" never reaches App.action_quit — hand off explicitly.
+        self.app.exit()
+
 
 # --------------------------------------------------------------------------- #
 # App shell.
@@ -313,12 +377,16 @@ class ParrotboxApp(App):
         bus: TranscriptBus,
         scenario_default: str | None,
         start_session: Callable[[SessionSetup], Awaitable[Callable[[], None]]],
+        log_queue: queue.Queue[str],
+        on_ready: Callable[[], None],
     ) -> None:
         super().__init__()
         self._controls = controls
         self._bus = bus
         self._scenario_default = scenario_default
         self._start_session = start_session
+        self._log_queue = log_queue
+        self._on_ready = on_ready
 
     def on_mount(self) -> None:
         self.push_screen(SetupScreen(self._scenario_default))
@@ -331,5 +399,12 @@ class ParrotboxApp(App):
     async def _launch(self, setup: SessionSetup) -> None:
         on_respond = await self._start_session(setup)
         await self.switch_screen(
-            LiveScreen(self._controls, self._bus, setup.meeting, on_respond)
+            LiveScreen(
+                self._controls,
+                self._bus,
+                setup.meeting,
+                on_respond,
+                self._log_queue,
+                self._on_ready,
+            )
         )

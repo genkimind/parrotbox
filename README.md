@@ -137,7 +137,7 @@ Startup asks four questions (enter accepts the default on each):
 4. **Response mode** — live (replies after every turn, the default) or meeting
    (transcribes silently; press `r` to get one reply over everything heard so far)
 
-First start takes ~30s (model loads + MPS shader warmup).
+First start takes ~1 min (model loads + MPS shader warmup).
 
 ### Meeting mode
 
