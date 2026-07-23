@@ -2,6 +2,8 @@
 name = "parrotbox"
 version = "0.1.0"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = [
     "chatterbox-tts>=0.1.7",
     "parakeet-mlx>=0.5.2",

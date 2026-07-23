@@ -171,6 +171,26 @@ conversing with its own echo (cut-off babble every few seconds).
 
 This is a personal, single-user, hobby-scale project, not a hardened product.
 It targets Apple Silicon specifically. The bundled `persona.md` and the eval test
-sentences are illustrative examples — replace them with your own. You are
-responsible for the licenses of the models and libraries it pulls in, and for
-having the right to clone whatever voice you use.
+sentences are illustrative examples — replace them with your own.
+
+## ⚠️ Voice cloning — your responsibility
+
+This software clones a person's voice from a short reference recording. **Only
+clone a voice you own, or one you have explicit, documented permission to
+reproduce.** Cloning someone's voice without consent can violate right-of-publicity,
+privacy, impersonation, and AI/deepfake-disclosure laws, which vary by
+jurisdiction. You are solely responsible for how you use it and for complying with
+applicable law. The authors provide this software as-is, with no warranty (see
+LICENSE).
+
+## License
+
+This project's own code is licensed under the **Apache License 2.0** — see
+[`LICENSE`](LICENSE).
+
+It does **not** include or redistribute its dependencies or any machine-learning
+model weights; those are fetched from PyPI and model hubs when you install and run
+it, and each is covered by **its own license**. See [`NOTICE`](NOTICE) for a
+summary of the notable third-party and model licenses. You are responsible for
+complying with those terms — in particular, **check the model and LLM-provider
+terms before any commercial use**.

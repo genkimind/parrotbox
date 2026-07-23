@@ -1,0 +1,54 @@
+parrotbox
+Copyright 2026 parrotbox contributors
+
+This product's own source code (the orchestration layer in this repository) is
+licensed under the Apache License, Version 2.0. See the LICENSE file.
+
+------------------------------------------------------------------------------
+Third-party software and machine-learning model weights
+------------------------------------------------------------------------------
+
+This repository does NOT include or redistribute its dependencies or any model
+weights. They are retrieved from PyPI and model hubs when the end user installs
+and runs this software. Each is the property of its authors and is provided under
+its own license. You are responsible for complying with those terms, especially
+for commercial use. The lists below are non-exhaustive and were accurate at the
+time of writing — always verify the current license of anything you actually use.
+
+Python dependencies (installed from PyPI via `uv sync`)
+  - pipecat-ai .................... BSD-2-Clause
+  - parakeet-mlx .................. Apache-2.0
+  - chatterbox-tts ............... MIT
+  - resemble-perth ............... MIT
+  - silero VAD ................... MIT
+  - most of the remaining tree ... MIT / BSD / Apache-2.0 / PSF
+
+  Transitive copyleft dependencies pulled from PyPI (installed by the end user,
+  not redistributed by this repository):
+  - pykakasi ..................... GPL-3.0-or-later
+  - soxr, num2words .............. LGPL
+  - certifi, orjson, tqdm ........ MPL-2.0
+  If you later build and distribute a BUNDLED artifact that vendors these
+  libraries (e.g. a packaged app, a wheel, or a container image), their copyleft
+  obligations attach to that artifact — review them before doing so.
+
+Machine-learning model weights (downloaded at runtime; not distributed here)
+  - Chatterbox / Chatterbox-Turbo (Resemble AI) ... MIT
+  - Parakeet TDT (NVIDIA) ......................... check the model card
+                                                    (typically CC-BY-4.0; attribution)
+  - Silero VAD ................................... MIT
+  - Smart Turn (bundled via pipecat) ............. see pipecat
+
+Hosted services
+  - The default LLM is DeepSeek (or any OpenAI-compatible endpoint you configure).
+    Use of a hosted LLM is governed by that provider's terms of service, not by
+    this license.
+
+------------------------------------------------------------------------------
+Voice cloning
+------------------------------------------------------------------------------
+
+This software can clone a person's voice from a reference recording. Only clone
+voices you own or have explicit, documented permission to reproduce. You are
+solely responsible for compliance with applicable laws, including right-of-
+publicity, privacy, impersonation, and AI/deepfake-disclosure laws.
