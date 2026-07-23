@@ -1,15 +1,15 @@
 """Local voice agent: mic → Parakeet STT → DeepSeek → Chatterbox clone → speaker.
 
-See ARCHITECTURE.md for the full design. Recommended — the --tui Textual
-interface: on-screen setup, a live conversation pane, and sliders for
-exaggeration/temperature/cfg_weight/speed that take effect mid-session. Logs
-go to logs/ instead of the console in that mode.
-
-    DEEPSEEK_API_KEY=... uv run python main.py --tui
-
-The classic console flow (prompts + log stream) still works without --tui:
+See ARCHITECTURE.md for the full design. The Textual interface is the default:
+on-screen setup, a live conversation pane, and sliders for
+exaggeration/temperature/cfg_weight/speed/volume that take effect mid-session.
+Logs go to logs/ instead of the console in that mode.
 
     DEEPSEEK_API_KEY=... uv run python main.py
+
+Add --console for the classic prompts + log-stream flow:
+
+    DEEPSEEK_API_KEY=... uv run python main.py --console
 """
 
 import asyncio
@@ -83,7 +83,7 @@ def _device_index(env_name: str) -> int | None:
 
 
 def _scenario_from_argv() -> str | None:
-    """Command-line scenario words, ignoring flags like --tui."""
+    """Command-line scenario words, ignoring flags like --console."""
     words = [a for a in sys.argv[1:] if not a.startswith("-")]
     return " ".join(words) or None
 
@@ -429,10 +429,12 @@ async def run_tui():
 
 async def main():
     _check_prerequisites()
-    if "--tui" in sys.argv:
-        await run_tui()
-    else:
+    # The Textual TUI is the default; --console opts into the classic
+    # prompts + log-stream flow. (--tui is still accepted as an explicit no-op.)
+    if "--console" in sys.argv:
         await run_cli()
+    else:
+        await run_tui()
 
 
 if __name__ == "__main__":

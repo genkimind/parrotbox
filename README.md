@@ -124,22 +124,22 @@ uv run python scripts/check_tts.py                 # TTS on MPS + RTF (gate: war
 
 ## Run
 
-**Recommended — the `--tui` Textual interface** (setup on screen, a clean
-conversation pane instead of log spam, and live voice sliders):
+The Textual interface (setup on screen, a clean conversation pane instead of log
+spam, and live voice sliders) is the **default** — see [TUI](#tui) below:
 
 ```bash
-DEEPSEEK_API_KEY=... uv run python main.py --tui                  # recommended (see "TUI" below)
-DEEPSEEK_API_KEY=... uv run python main.py --tui daily standup    # scenario from argv, skips that prompt
+DEEPSEEK_API_KEY=... uv run python main.py                       # Textual interface (default)
+DEEPSEEK_API_KEY=... uv run python main.py daily standup         # scenario from argv, skips that prompt
 ```
 
-Prefer a plain console? The classic CLI still works exactly as before:
+Prefer a plain console? Add `--console` for the classic prompts + log-stream flow:
 
 ```bash
-DEEPSEEK_API_KEY=... uv run python main.py                        # prompts for a scenario
-DEEPSEEK_API_KEY=... uv run python main.py daily scrum standup    # scenario from argv
+DEEPSEEK_API_KEY=... uv run python main.py --console                       # prompts for a scenario
+DEEPSEEK_API_KEY=... uv run python main.py --console daily scrum standup   # scenario from argv
 ```
 
-In the classic CLI, startup asks four questions (enter accepts the default on each):
+In the classic console flow, startup asks four questions (enter accepts the default on each):
 
 1. **Scenario** — short context that shapes register and tone for the session
    ("scrum meeting", "chatting with a friend"); skipped if given on the command line
@@ -165,10 +165,10 @@ one. Half duplex + meeting works but mutes the mic while the agent talks, so
 meeting speech during a reply is lost — full duplex with headphones is the
 better meeting setup.
 
-### TUI (`--tui`)
+### TUI
 
-`--tui` swaps the console prompts and log stream for a [Textual](https://textual.textualize.io)
-interface with three parts:
+The default interface is a [Textual](https://textual.textualize.io) app (pass
+`--console` to get the plain prompts + log stream instead). It has three parts:
 
 - **Setup screen** — the same four questions (scenario, mic mode, response
   mode), on screen. Voice speed moves to a live slider, so it isn't asked here.
