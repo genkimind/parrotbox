@@ -24,6 +24,7 @@ from pipecat.frames.frames import ErrorFrame, Frame, StartFrame
 from pipecat.services.tts_service import TTSService
 
 from clause_aggregator import ClauseEagerAggregator
+from runtime_controls import RuntimeControls
 
 SLICE_SECS = 0.04  # small frames so the output transport can flush mid-chunk on barge-in
 
@@ -34,7 +35,7 @@ class ChatterboxTTSService(TTSService):
         *,
         reference_wav: str | Path,
         device: str = "mps",
-        speed: float = 1.0,
+        controls: RuntimeControls | None = None,
         **kwargs,
     ):
         from pipecat.services.settings import TTSSettings
@@ -45,9 +46,10 @@ class ChatterboxTTSService(TTSService):
         )
         self._reference_wav = Path(reference_wav)
         self._device = device
-        # Pitch-preserving playback-rate multiplier (1.1 = 10% faster). Applied
-        # as a post-synth time-stretch; Chatterbox itself has no speed control.
-        self._speed = speed
+        # Live synthesis knobs (exaggeration/temperature/cfg_weight, and the
+        # post-synth pitch-preserving speed stretch). Read fresh on every
+        # _synth() call so the TUI's sliders take effect within a sentence.
+        self._controls = controls or RuntimeControls()
         self._model = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._text_aggregator = ClauseEagerAggregator()
@@ -93,12 +95,18 @@ class ChatterboxTTSService(TTSService):
         )
 
     def _synth(self, text: str) -> bytes:
-        wav = self._model.generate(text)
+        c = self._controls.snapshot()  # one consistent read for this chunk
+        wav = self._model.generate(
+            text,
+            exaggeration=c.exaggeration,
+            temperature=c.temperature,
+            cfg_weight=c.cfg_weight,
+        )
         wav = wav.squeeze().cpu().numpy()
-        if self._speed != 1.0:
+        if c.speed != 1.0:
             import librosa
 
-            wav = librosa.effects.time_stretch(wav, rate=self._speed)
+            wav = librosa.effects.time_stretch(wav, rate=c.speed)
         return (np.clip(wav, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
 
     async def run_tts(self, text: str, context_id: str) -> AsyncGenerator[Frame | None, None]:

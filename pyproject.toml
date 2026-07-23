@@ -9,6 +9,7 @@ dependencies = [
     "parakeet-mlx>=0.5.2",
     "pipecat-ai[local,openai,silero]>=1.6.0",
     "setuptools<81",
+    "textual>=8.2.8",
 ]
 
 [tool.uv]

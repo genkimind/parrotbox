@@ -122,6 +122,7 @@ uv run python scripts/check_tts.py                 # TTS on MPS + RTF (gate: war
 ```bash
 DEEPSEEK_API_KEY=... uv run python main.py                        # prompts for a scenario
 DEEPSEEK_API_KEY=... uv run python main.py daily scrum standup    # scenario from argv
+DEEPSEEK_API_KEY=... uv run python main.py --tui                  # Textual interface (see below)
 ```
 
 Startup asks four questions (enter accepts the default on each):
@@ -149,6 +150,27 @@ pressing `r` while the agent is talking queues the reply behind the current
 one. Half duplex + meeting works but mutes the mic while the agent talks, so
 meeting speech during a reply is lost — full duplex with headphones is the
 better meeting setup.
+
+### TUI (`--tui`)
+
+`--tui` swaps the console prompts and log stream for a [Textual](https://textual.textualize.io)
+interface with three parts:
+
+- **Setup screen** — the same four questions (scenario, mic mode, response
+  mode), on screen. Voice speed moves to a live slider, so it isn't asked here.
+- **Conversation pane** — only what was said and what the agent spoke; no logs.
+  (Logs are redirected to `logs/parrotbox-<timestamp>.log`.)
+- **Voice sliders** — Exaggeration, Temperature, CFG weight, and Speed,
+  adjustable *while talking*. Because Chatterbox takes these per synthesis call,
+  a change is audible within a sentence.
+
+Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it (`Shift` for a bigger step),
+`r` responds in meeting mode, `q` quits.
+
+Exaggeration is the emotion dial — raise it for a more excited, animated
+delivery (the default 0.5 is a touch livelier than neutral); past ~0.7 it
+speeds up and gets theatrical. If it rushes at high exaggeration, raise CFG
+weight to slow the pacing back down.
 
 ### Echo / headphones
 
