@@ -30,6 +30,12 @@ class ParakeetMLXSTTService(SegmentedSTTService):
         self._model_name = model_name
         self._model = None
 
+    def can_generate_metrics(self) -> bool:
+        # Without this the start/stop_processing_metrics() calls in run_stt are
+        # no-ops (FrameProcessor defaults to False), and pipecat never reports
+        # this service's TTFB.
+        return True
+
     @property
     def wants_wav_segments(self) -> bool:
         # Raw 16-bit PCM, not a WAV container.

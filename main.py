@@ -51,6 +51,7 @@ from stt_parakeet import ParakeetMLXSTTService
 from transcript_tap import TranscriptTap
 from tts_chatterbox import ChatterboxTTSService
 from tts_normalize import TTSNormalizeFilter
+from turn_metrics import TTSChunkLog, TurnMetricsObserver
 
 REFERENCE_WAV = Path(os.environ.get("VOICE_REFERENCE", "voice_ref/reference.wav"))
 
@@ -135,6 +136,7 @@ def build_pipeline(
     *,
     controls: RuntimeControls | None = None,
     bus=None,
+    metrics_jsonl: Path | None = None,
 ) -> BuiltPipeline:
     config = config or SessionConfig()
     # Seed the live controls from the session's starting speed; the TUI mutates
@@ -167,9 +169,14 @@ def build_pipeline(
         ),
     )
 
+    # Per-chunk synthesis stats live here; the observer drains them at the end
+    # of each turn to build one stitched latency line.
+    chunk_log = TTSChunkLog()
+
     tts = ChatterboxTTSService(
         reference_wav=REFERENCE_WAV,
         controls=controls,
+        chunk_log=chunk_log,
         # Rewrites LLM output into speakable form ("..." would be spoken as
         # "dot dot dot") — filtered text is also what history records.
         text_filters=[TTSNormalizeFilter()],
@@ -238,6 +245,10 @@ def build_pipeline(
     worker = PipelineWorker(
         Pipeline(stages),
         params=PipelineParams(enable_metrics=True),
+        # An observer sees every frame without sitting in the pipeline, so the
+        # latency line costs nothing on the critical path (pipecat feeds each
+        # observer from its own queue).
+        observers=[TurnMetricsObserver(chunk_log, jsonl_path=metrics_jsonl)],
         idle_timeout_secs=None,  # personal always-on session; never self-cancel
     )
     return BuiltPipeline(
@@ -320,13 +331,19 @@ def _make_clear(context: "LLMContext", system_content: str):
 
 
 async def run_cli():
+    from datetime import datetime
+
     config = get_session_config()
     logger.info(
         f"Session: scenario={config.scenario or '(none)'} speed={config.speed} "
         f"mode={'half' if config.half_duplex else 'full'}-duplex"
     )
 
-    built = build_pipeline(config)
+    logs_dir = Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    metrics_jsonl = logs_dir / f"turns-{datetime.now():%Y%m%d-%H%M%S}.jsonl"
+
+    built = build_pipeline(config, metrics_jsonl=metrics_jsonl)
     worker, gate = built.worker, built.meeting_gate
     runner = WorkerRunner(handle_sigint=True)
     await runner.add_workers(worker)
@@ -356,7 +373,10 @@ async def run_tui():
     # ready, at which point on_ready() detaches it.
     logs_dir = Path("logs")
     logs_dir.mkdir(exist_ok=True)
-    logfile = logs_dir / f"parrotbox-{datetime.now():%Y%m%d-%H%M%S}.log"
+    stamp = f"{datetime.now():%Y%m%d-%H%M%S}"
+    logfile = logs_dir / f"parrotbox-{stamp}.log"
+    # One JSON object per turn, for offline analysis (RTF drift, gap trends).
+    metrics_jsonl = logs_dir / f"turns-{stamp}.jsonl"
     logger.remove()
     logger.add(str(logfile), level="INFO")
 
@@ -387,7 +407,9 @@ async def run_tui():
             meeting=setup.meeting,
         )
         logger.info(f"Session: {config}")
-        built = build_pipeline(config, controls=controls, bus=bus)
+        built = build_pipeline(
+            config, controls=controls, bus=bus, metrics_jsonl=metrics_jsonl
+        )
         worker = built.worker
         runner = WorkerRunner(handle_sigint=False)  # Textual owns the keyboard
         await runner.add_workers(worker)

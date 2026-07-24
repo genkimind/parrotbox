@@ -120,7 +120,11 @@ reference becomes permanent reverb in the clone.
 uv run python scripts/check_stt.py                 # STT accuracy + latency (gate: <300ms warm)
 DEEPSEEK_API_KEY=... uv run python scripts/measure_ttft.py   # LLM TTFT p50/p95 (gate: p95 <1s)
 uv run python scripts/check_tts.py                 # TTS on MPS + RTF (gate: warm RTF <1.0)
+uv run python scripts/check_chunking.py            # chunk policy: correctness + gap estimate
 ```
+
+`check_chunking.py` needs no models and runs in a second — see
+[Latency and chunk tuning](#latency-and-chunk-tuning).
 
 ## Run
 
@@ -213,6 +217,49 @@ There is no echo cancellation. **Headphones are required for barge-in** (full
 duplex). On open speakers, pick half duplex at the mic-mode question — otherwise
 the mic hears the agent, barge-in triggers on its own voice, and it ends up
 conversing with its own echo (cut-off babble every few seconds).
+
+## Latency and chunk tuning
+
+Every turn writes one latency line to the log, plus a machine-readable record to
+`logs/turns-<timestamp>.jsonl`:
+
+```
+TURN ttfa=2.35s (stt 0.25s | llm 1.04s | tts 1.05s) chunks=3 audio=6.00s gaps=1.60s max=1.60s
+```
+
+`ttfa` is what you feel as "how long until it starts talking", broken into its
+three stages. **`gaps` is dead air *after* it started talking** — the agent
+running out of synthesized audio mid-reply and stalling before the next chunk is
+ready. Those are two different complaints with two different fixes, which is why
+they're measured separately.
+
+Gaps happen because Chatterbox has no streaming synthesis: audio is made one
+chunk at a time at RTF ~0.9, so a chunk costs roughly its own duration to
+produce. Playback only stays continuous while each chunk lasts long enough to
+cover the *next* one being synthesized — about a 1.1× growth budget per chunk.
+`ClauseEagerAggregator` therefore ramps chunk sizes, sizing each one against
+what was actually just emitted rather than emitting whole sentences.
+
+Tune it without editing code (defaults shown):
+
+- `PARROTBOX_MIN_FIRST_CHARS` (24) — first chunk floor. Sets time-to-first-audio.
+  Raising it makes the opening phrase longer but delays every first word;
+  measurements say it buys very little, because the ramp is what prevents gaps.
+- `PARROTBOX_MIN_CHUNK_CHARS` (24) — prosody floor for later chunks. Chatterbox
+  degrades badly below ~5 words, so don't go lower.
+- `PARROTBOX_CHUNK_RAMP` (1.25) — per-chunk growth. Lower is safer (more, smaller
+  chunks); higher gives better prosody but risks gaps.
+- `PARROTBOX_MAX_CHUNK_CHARS` (180) — stop growing past this.
+
+`scripts/check_chunking.py` estimates first-audio and gaps for a policy without
+loading any models, so you can compare settings in seconds. Treat it as a guide:
+`gap_total_ms` in `logs/turns-*.jsonl` is the ground truth. If gaps are near
+zero and it still feels slow, the problem is `ttfa`, not chunking — check which
+of the three stages dominates before changing anything here.
+
+One case the ramp cannot fix is a long sentence with no commas: there is nothing
+to split on, so it synthesizes as one long chunk. That needs streaming synthesis
+(see ARCHITECTURE.md).
 
 ## Configuration (environment variables)
 

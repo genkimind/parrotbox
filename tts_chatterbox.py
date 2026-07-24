@@ -25,6 +25,7 @@ from pipecat.services.tts_service import TTSService
 
 from clause_aggregator import ClauseEagerAggregator
 from runtime_controls import RuntimeControls
+from turn_metrics import TTSChunkLog
 
 SLICE_SECS = 0.04  # small frames so the output transport can flush mid-chunk on barge-in
 
@@ -36,6 +37,7 @@ class ChatterboxTTSService(TTSService):
         reference_wav: str | Path,
         device: str = "mps",
         controls: RuntimeControls | None = None,
+        chunk_log: TTSChunkLog | None = None,
         **kwargs,
     ):
         from pipecat.services.settings import TTSSettings
@@ -50,9 +52,16 @@ class ChatterboxTTSService(TTSService):
         # post-synth pitch-preserving speed stretch). Read fresh on every
         # _synth() call so the TUI's sliders take effect within a sentence.
         self._controls = controls or RuntimeControls()
+        self._chunk_log = chunk_log
         self._model = None
         self._executor = ThreadPoolExecutor(max_workers=1)
         self._text_aggregator = ClauseEagerAggregator()
+
+    def can_generate_metrics(self) -> bool:
+        # FrameProcessor returns False by default, which makes every
+        # start/stop_ttfb_metrics() call below a silent no-op. Opting in is what
+        # turns on pipecat's own TTFB/TTFA accounting for this service.
+        return True
 
     async def start(self, frame: StartFrame):
         await super().start(frame)
@@ -129,12 +138,29 @@ class ChatterboxTTSService(TTSService):
             pcm = await asyncio.get_running_loop().run_in_executor(
                 self._executor, self._synth, text
             )
-            synth_secs = time.monotonic() - t0
+            t_done = time.monotonic()
+            synth_secs = t_done - t0
             audio_secs = len(pcm) / 2 / self._model.sr
             logger.debug(
                 f"TTS chunk {synth_secs * 1000:.0f}ms for {audio_secs:.1f}s audio "
                 f"(RTF {synth_secs / max(audio_secs, 0.01):.2f}): {text[:60]!r}"
             )
+            if self._chunk_log is not None:
+                # Records the chunk and derives any playback gap it caused —
+                # see turn_metrics.TTSChunkLog for the model. Cheap and
+                # synchronous; the observer drains it at end of turn.
+                stat = self._chunk_log.record(
+                    text=text,
+                    synth_secs=synth_secs,
+                    audio_secs=audio_secs,
+                    t_done=t_done,
+                )
+                if stat.gap_secs > 0.05:
+                    logger.info(
+                        f"TTS gap {stat.gap_secs * 1000:.0f}ms before chunk {stat.index} "
+                        f"({stat.chars} chars, RTF {stat.rtf:.2f}) — "
+                        "previous chunk was too short to cover this one's synthesis"
+                    )
 
             async def slices() -> AsyncIterator[bytes]:
                 step = int(self._model.sr * SLICE_SECS) * 2

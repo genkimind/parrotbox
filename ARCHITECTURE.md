@@ -73,11 +73,23 @@ STT during speech cuts finalize to ~50 ms.
 
 ## Streaming handoffs
 
-- Chunk policy (`ClauseEagerAggregator`): first chunk flushes at the first clause
-  boundary (comma/semicolon/dash) once ≥ ~40 chars, or sentence end, whichever first.
-  Subsequent chunks: full sentences only. Rationale: first chunk sets time-to-first-audio;
-  Chatterbox prosody degrades under ~5 words, so never flush slivers; after chunk one,
-  playback hides synth time so full sentences buy prosody for free.
+- Chunk policy (`ClauseEagerAggregator`): **ramped**. Every chunk flushes at a clause
+  boundary (comma/semicolon/colon/dash) once past a minimum, and that minimum grows in
+  proportion to the chunk just emitted (`min_chunk_chars=24`, `ramp=1.25`, capped at 180).
+  The first chunk's floor stays at 24 chars, because it sets time-to-first-audio.
+
+  This replaces the original "eager first chunk, then full sentences" policy, which was
+  wrong: playback stays continuous only while `synth(chunk k) ≤ duration(chunk k-1)`, and
+  at RTF ~0.9 that allows only ~1.1× growth per chunk. Emitting full sentences after a ~1s
+  opener blew that budget badly — measured (`scripts/check_chunking.py`) at 4.94s of total
+  dead air per reply, worst case 7.72s. Ramping cuts that to 2.20s / 3.08s at unchanged
+  time-to-first-audio.
+
+  Note the counter-intuitive result: **lengthening the first chunk is not the fix.** Going
+  24 → 48 chars improves gaps by 0.06s while adding 0.37s before every first word. The
+  bound on *subsequent* chunks is what buys continuity. Residual gaps are all long
+  clause-free sentences, which have no legal split point — only streaming synthesis fixes
+  those.
 - Chatterbox upstream is batch-per-`generate()` (verified against repo). The
   davidbrowne17/chatterbox-streaming fork adds token-loop streaming for *base*
   Chatterbox; Turbo compatibility unknown. Evaluate only after the batch pipeline works
@@ -183,10 +195,27 @@ sessions is throttling, not a leak — log per-chunk RTF over session time.
   Detect silent failure via "no VAD activity for N min on a healthy stream".
 - Model load: load + warm both at startup, fail fast before opening the mic.
 - VAD misfires: log Silero confidence histogram continuously.
-- Metrics: `enable_metrics=True` (per-service TTFB) plus one per-turn JSON line
-  stitching `vad_stop → turn_decision → transcript → llm_first_token →
-  tts_first_audio → playback_start`. Every latency regression is a delta in exactly
-  one of those gaps.
+- Metrics: **implemented** in `turn_metrics.py`. `TurnMetricsObserver` is a pipecat
+  `BaseObserver` (registered via `PipelineWorker(observers=[...])`, so it watches every
+  frame without sitting in the pipeline) that stitches `vad_stop → transcript →
+  llm_first_token → tts_first_audio` into one INFO line per turn, plus a JSON record in
+  `logs/turns-<timestamp>.jsonl`. Every latency regression is a delta in exactly one of
+  those gaps.
+
+  Two things this had to add beyond pipecat's built-ins:
+
+  1. `can_generate_metrics()` returns `False` on the `FrameProcessor` base, and only
+     vendor services override it — so the `start/stop_*_metrics()` calls already present
+     in `stt_parakeet.py` and `tts_chatterbox.py` were silent no-ops. Both services now
+     override it.
+  2. Pipecat measures TTFB but has no notion of **playback gaps** — dead air *after*
+     speech starts, when a chunk's synthesis outlasts the previous chunk's duration.
+     That's the metric that governs whether a reply sounds fluent, so `TTSChunkLog`
+     derives it directly from per-chunk synth timings (playback is modelled as: a chunk
+     starts at `max(t_synth_done, previous_playback_end)`; any daylight is a gap).
+
+  Per-chunk RTF is recorded alongside, which is the thermal-throttling signal — RTF
+  drifting up over a long session is throttling, not a leak.
 
 ## Open questions — resolved
 
