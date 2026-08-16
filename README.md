@@ -22,7 +22,7 @@ Design and rationale: [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Setup
 
 ```bash
-brew install portaudio ffmpeg rubberband
+brew install portaudio rubberband
 uv sync
 ```
 
@@ -104,20 +104,6 @@ the setup screen, then:
 
 The setup screen's **Start session** stays disabled until a reference exists,
 so a first run can't fail deep inside model loading.
-
-Prefer an objective score over an ear pick? The offline eval (Parakeet WER +
-resemblyzer similarity over a fixed 10-sentence set) still works, pointed at
-the same candidate windows the TUI cut:
-
-```bash
-uv run --with resemblyzer python scripts/eval_clone.py \
-    --real voice_ref/capture_full.wav voice_ref/candidates/cand_*.wav
-# then promote the winning CANDIDATE (not one of its test sentences):
-cp voice_ref/candidates/cand_<winner>.wav voice_ref/reference.wav
-```
-
-(The fully manual scripted flow — `scripts/capture_reference.py` + your own
-ffmpeg window cuts — also still works; it all ends at `voice_ref/reference.wav`.)
 
 > Only clone a voice you have the right to use — your own, or one you have clear
 > permission to reproduce. `voice_ref/` is gitignored and never distributed.
