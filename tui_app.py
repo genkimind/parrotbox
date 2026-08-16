@@ -12,8 +12,10 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import subprocess
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, VerticalScroll
@@ -35,6 +37,8 @@ from textual.widgets import (
 READY_MARKER = "pipeline is now ready"
 
 from runtime_controls import PARAM_SPECS, ParamSpec, RuntimeControls
+
+import clone_voice
 
 
 class TranscriptBus:
@@ -84,16 +88,20 @@ class SetupScreen(Screen):
     #setup Input { margin-top: 1; }
     #setup RadioSet { margin-top: 1; }
     #start { margin-top: 1; width: 100%; }
+    #clone { margin-top: 1; width: 100%; }
+    #ref-warning { margin-top: 1; }
     #hint { color: $text-muted; margin-top: 1; }
     """
 
-    def __init__(self, scenario_default: str | None) -> None:
+    def __init__(self, scenario_default: str | None, reference_path: Path) -> None:
         super().__init__()
         self._scenario_default = scenario_default
+        self._reference_path = reference_path
 
     def compose(self) -> ComposeResult:
         with Container(id="setup"):
             yield Static("parrotbox — session setup", classes="label")
+            yield Static("", id="ref-warning")
             yield Static("Scenario (e.g. 'scrum standup') — optional", classes="label")
             yield Input(
                 value=self._scenario_default or "",
@@ -109,6 +117,7 @@ class SetupScreen(Screen):
                 yield RadioButton("Live — reply every turn", value=True)
                 yield RadioButton("Meeting — hold replies until you press 'r'")
             yield Button("Start session", variant="primary", id="start")
+            yield Button("Clone a voice…", id="clone")
             yield Static(
                 "Voice/emotion sliders are adjustable live once the session starts.",
                 id="hint",
@@ -116,6 +125,21 @@ class SetupScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#scenario", Input).focus()
+        self._refresh_ref_state()
+
+    def _refresh_ref_state(self) -> None:
+        """Start stays locked until a voice reference exists — cloning one is
+        the in-app fix, so point at it instead of failing at pipeline start."""
+        missing = not self._reference_path.exists()
+        self.query_one("#ref-warning", Static).update(
+            f"[b yellow]no voice reference at {self._reference_path} — clone one first[/]"
+            if missing
+            else ""
+        )
+        self.query_one("#start", Button).disabled = missing
+
+    def _on_clone_done(self, promoted: bool | None) -> None:
+        self._refresh_ref_state()
 
     def _submit(self) -> None:
         scenario = self.query_one("#scenario", Input).value.strip() or None
@@ -124,10 +148,245 @@ class SetupScreen(Screen):
         self.app.begin_session(SessionSetup(scenario, half_duplex, meeting))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        self._submit()
+        if event.button.id == "clone":
+            self.app.push_screen(CloneScreen(), self._on_clone_done)
+        else:
+            self._submit()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._submit()
+
+
+# --------------------------------------------------------------------------- #
+# Clone screen — record, auto-slice candidates, listen, pick. Replaces the old
+# capture_reference.py + ffmpeg + eval_clone.py + cp manual flow.
+# --------------------------------------------------------------------------- #
+
+
+class CloneScreen(Screen):
+    """Guided voice cloning. All blocking work (record, model load, synth) runs
+    off the event loop; the screen only mutates widgets."""
+
+    AUTO_FOCUS = ""
+
+    CSS = """
+    CloneScreen { align: center middle; }
+    #clone {
+        width: 78; height: auto; max-height: 95%;
+        padding: 1 2; border: round $secondary;
+    }
+    #clone > .label { margin-top: 1; text-style: bold; }
+    #clone .dim { color: $text-muted; }
+    #rec-status, #build-status { color: $text-muted; min-height: 1; }
+    .cand-row { layout: horizontal; height: auto; margin-top: 1; }
+    .cand-label { padding: 1 1 0 0; width: 24; }
+    .cand-row Button { margin-right: 1; }
+    #promote-status { color: $text-muted; margin-top: 1; min-height: 1; }
+    #back { margin-top: 1; }
+    """
+
+    BINDINGS = [("escape", "back", "Back")]
+
+    def __init__(
+        self,
+        *,
+        recorder_factory: Callable[[], clone_voice.Recorder] = clone_voice.Recorder,
+        previewer_factory: Callable[[], clone_voice.ClonePreviewer] = clone_voice.ClonePreviewer,
+    ) -> None:
+        super().__init__()
+        self._recorder_factory = recorder_factory
+        self._previewer_factory = previewer_factory
+        self._recorder: clone_voice.Recorder | None = None
+        self._previewer: clone_voice.ClonePreviewer | None = None
+        self._candidates: list[tuple[float, Path]] = []
+        self._previews: list[Path] = []
+        self._player: subprocess.Popen | None = None
+        self._rec_timer = None
+        self._building = False
+        self._promoted = False
+
+    def compose(self) -> ComposeResult:
+        with Container(id="clone"):
+            yield Static("Clone a voice", classes="label")
+            yield Static(
+                "Quiet room, mic mode Standard (no Voice Isolation). Talk naturally —\n"
+                "a question, a statement, normal energy. Don't read, don't perform.\n"
+                "Reverb in the recording becomes permanent reverb in the clone.",
+                classes="dim",
+            )
+            yield Static(
+                "Only clone a voice you own or have clear permission to reproduce.",
+                classes="dim",
+            )
+            yield Static("1 · Record a sample (30s+ is plenty)", classes="label")
+            yield Button("● record", variant="error", id="record")
+            yield Static("", id="rec-status")
+            yield Static("2 · Build candidate previews", classes="label")
+            yield Button("build previews", id="build", disabled=True)
+            yield Static("", id="build-status")
+            yield Static("3 · Listen and pick", classes="label")
+            yield Container(id="candidates")
+            yield Static("", id="promote-status")
+            yield Button("‹ back to setup", id="back")
+
+    # -- step 1: record ------------------------------------------------------ #
+
+    def _toggle_record(self, button: Button) -> None:
+        status = self.query_one("#rec-status", Static)
+        if self._recorder is not None and self._recorder.recording:
+            secs = self._recorder.elapsed()
+            path = self._recorder.stop()
+            self._rec_timer.stop()
+            button.label = "● record"
+            if secs >= clone_voice.MIN_CAPTURE_SECS:
+                status.update(f"captured {secs:.0f}s → {path}")
+                self.query_one("#build", Button).disabled = False
+            else:
+                status.update(
+                    f"too short ({secs:.0f}s) — need at least "
+                    f"{clone_voice.MIN_CAPTURE_SECS}s; record again"
+                )
+            return
+        self._recorder = self._recorder_factory()
+        try:
+            self._recorder.start()
+        except Exception as e:
+            status.update(f"[b red]mic open failed: {e}[/]")
+            return
+        button.label = "■ stop"
+        self._rec_timer = self.set_interval(0.5, self._tick_rec)
+
+    def _tick_rec(self) -> None:
+        if self._recorder is not None:
+            self.query_one("#rec-status", Static).update(
+                f"recording… {self._recorder.elapsed():.0f}s — talk naturally, then stop"
+            )
+
+    # -- step 2: slice + synthesize previews (thread) ------------------------ #
+
+    def _build(self) -> None:
+        self.query_one("#build", Button).disabled = True
+        self._building = True
+        self.run_worker(self._build_worker, thread=True, exclusive=True, exit_on_error=False)
+
+    def _build_worker(self) -> None:
+        """Runs in a worker thread: slice windows, load Chatterbox once, render
+        one fixed preview sentence per candidate."""
+        try:
+            self._set_status("slicing candidate windows…")
+            candidates = clone_voice.slice_candidates(
+                clone_voice.capture_path(), clone_voice.candidates_dir()
+            )
+            self._previewer = self._previewer_factory()
+            self._set_status("loading Chatterbox (first load ~30s)…")
+            self._previewer.load()
+            previews = []
+            for i, (_, cand) in enumerate(candidates):
+                self._set_status(f"synthesizing preview {i + 1}/{len(candidates)}…")
+                wav, sr = self._previewer.synthesize(cand)
+                preview = cand.with_name(f"{cand.stem}_preview.wav")
+                clone_voice.write_wav_f32(preview, wav, sr)
+                previews.append(preview)
+            self.app.call_from_thread(self._show_candidates, candidates, previews)
+        except Exception as e:
+            self.app.call_from_thread(self._build_failed, e)
+
+    def _set_status(self, text: str) -> None:
+        self.app.call_from_thread(
+            self.query_one("#build-status", Static).update, text
+        )
+
+    def _build_failed(self, error: Exception) -> None:
+        self._building = False
+        self.query_one("#build-status", Static).update(f"[b red]failed: {error}[/]")
+        self.query_one("#build", Button).disabled = False
+
+    def _show_candidates(
+        self, candidates: list[tuple[float, Path]], previews: list[Path]
+    ) -> None:
+        self._building = False
+        self._candidates = candidates
+        self._previews = previews
+        rows = self.query_one("#candidates", Container)
+        rows.remove_children()
+        for i, (start, _) in enumerate(candidates):
+            letter = chr(ord("a") + i)
+            row = Container(
+                Static(
+                    f"{letter} · {start:.0f}s–{start + clone_voice.WINDOW_SECS:.0f}s",
+                    classes="cand-label",
+                ),
+                Button("▶ play", id=f"play-{i}"),
+                Button("use this voice", id=f"use-{i}"),
+                classes="cand-row",
+            )
+            rows.mount(row)
+        self.query_one("#build-status", Static).update(
+            "each candidate is a different 12s window — listen, then pick one"
+        )
+
+    # -- step 3: listen + pick ------------------------------------------------ #
+
+    def _play(self, index: int) -> None:
+        self._stop_player()
+        preview = self._previews[index]
+        # afplay: no extra audio deps, and previews are already WAV files.
+        self._player = subprocess.Popen(
+            ["afplay", str(preview)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.query_one("#promote-status", Static).update(
+            f"playing {chr(ord('a') + index)}…"
+        )
+
+    def _stop_player(self) -> None:
+        if self._player is not None and self._player.poll() is None:
+            self._player.terminate()
+        self._player = None
+
+    def _use(self, index: int) -> None:
+        self._stop_player()
+        dest = clone_voice.promote(self._candidates[index][1])
+        self._promoted = True
+        for i in range(len(self._candidates)):
+            btn = self.query_one(f"#use-{i}", Button)
+            btn.label = "✓ in use" if i == index else "use this voice"
+        self.query_one("#promote-status", Static).update(
+            f"[b green]✓ {dest} updated — back to setup when ready[/]"
+        )
+
+    # -- exit ------------------------------------------------------------------ #
+
+    def _cleanup(self) -> None:
+        self._stop_player()
+        if self._recorder is not None and self._recorder.recording:
+            self._recorder.stop()
+        # Free the preview model so a session started right after cloning
+        # doesn't carry two Chatterbox copies in memory. Skip while a build is
+        # mid-flight — the worker still holds it; it frees on completion.
+        if self._previewer is not None and not self._building:
+            self._previewer.unload()
+
+    def action_back(self) -> None:
+        self._cleanup()
+        self.dismiss(self._promoted)
+
+    def on_unmount(self) -> None:
+        self._cleanup()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        bid = event.button.id or ""
+        if bid == "record":
+            self._toggle_record(event.button)
+        elif bid == "build":
+            self._build()
+        elif bid == "back":
+            self.action_back()
+        elif bid.startswith("play-"):
+            self._play(int(bid[len("play-"):]))
+        elif bid.startswith("use-"):
+            self._use(int(bid[len("use-"):]))
 
 
 # --------------------------------------------------------------------------- #
@@ -495,6 +754,7 @@ class ParrotboxApp(App):
         controls: RuntimeControls,
         bus: TranscriptBus,
         scenario_default: str | None,
+        reference_path: Path,
         start_session: Callable[[SessionSetup], Awaitable[SessionHandles]],
         log_queue: queue.Queue[str],
         on_ready: Callable[[], None],
@@ -503,12 +763,13 @@ class ParrotboxApp(App):
         self._controls = controls
         self._bus = bus
         self._scenario_default = scenario_default
+        self._reference_path = reference_path
         self._start_session = start_session
         self._log_queue = log_queue
         self._on_ready = on_ready
 
     def on_mount(self) -> None:
-        self.push_screen(SetupScreen(self._scenario_default))
+        self.push_screen(SetupScreen(self._scenario_default, self._reference_path))
 
     def begin_session(self, setup: SessionSetup) -> None:
         # Fire-and-forget: the factory builds the pipeline and starts the

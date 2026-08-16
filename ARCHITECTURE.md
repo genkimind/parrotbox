@@ -162,15 +162,21 @@ Stable-prefix rolling window with lazy background summarization:
 ## Voice clone reference capture
 
 - Record 60–90 s, harvest best 10–12 s contiguous window (Chatterbox uses ~10 s).
+- In-product: the TUI's Clone screen records once, auto-slices spread candidate
+  windows (`clone_voice.py`), synthesizes one fixed preview sentence per
+  candidate with a single Chatterbox load, plays them back for A/B, and copies
+  the winner to `voice_ref/reference.wav`. Preview model is unloaded on exit so
+  the session doesn't hold two Chatterbox copies.
 - 48 kHz WAV, **no processing**: disable Voice Isolation/AGC/noise suppression for
   capture. Quiet damped room; reverb in reference = permanent reverb in clone.
 - Natural conversational speech, normal energy, include a question + a statement.
   Don't read, don't perform.
-- Objective eval (`scripts/eval_clone.py`): 3–4 candidate windows × fixed 10-sentence
-  set, score each on (1) speaker similarity — ECAPA/resemblyzer cosine vs held-out real
-  recordings, calibrated against real-vs-real self-similarity (~0.80–0.90); (2)
-  intelligibility — Parakeet WER of TTS output vs known text, target <5%; (3) ear A/B.
-  Pick winner of (1) not failing (2).
+- Objective eval (`scripts/eval_clone.py`), optional: point it at
+  `voice_ref/candidates/cand_*.wav`; scores each candidate on (1) speaker
+  similarity — ECAPA/resemblyzer cosine vs held-out real recordings, calibrated
+  against real-vs-real self-similarity (~0.80–0.90); (2) intelligibility —
+  Parakeet WER of TTS output vs known text, target <5%; (3) ear A/B. Pick
+  winner of (1) not failing (2).
 
 ## Resource budget (18 GB unified)
 

@@ -12,11 +12,14 @@ Add --console for the classic prompts + log-stream flow:
     DEEPSEEK_API_KEY=... uv run python main.py --console
 """
 
+from __future__ import annotations
+
 import asyncio
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # Chatterbox runs tqdm progress bars inside every generate() call; in a
 # long-running agent that's pure log spam. Must be set before chatterbox loads.
@@ -24,36 +27,20 @@ os.environ.setdefault("TQDM_DISABLE", "1")
 
 from loguru import logger
 
-from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
-from pipecat.frames.frames import LLMRunFrame, TTSSpeakFrame
-from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.pipeline.pipeline import Pipeline
-from pipecat.pipeline.worker import PipelineParams, PipelineWorker
-from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
-from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
-from pipecat.turns.user_mute import AlwaysUserMuteStrategy
-from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
-from pipecat.turns.user_turn_strategies import UserTurnStrategies
-from pipecat.workers.runner import WorkerRunner
-
-from meeting_mode import MeetingGate, install_key_listener
-from mic_gate import MicGate
+# Only cheap imports at module level. Pipecat and everything that pulls it in
+# (smart-turn → torch, VAD, transports) costs ~3.5s of import time; it is all
+# imported lazily inside the functions below so the TUI's setup screen renders
+# immediately instead of after a multi-second blank.
+from clone_voice import reference_path
 from persona import build_system_prompt
 from runtime_controls import RuntimeControls
-from stt_parakeet import ParakeetMLXSTTService
-from transcript_tap import TranscriptTap
-from tts_chatterbox import ChatterboxTTSService
-from tts_normalize import TTSNormalizeFilter
-from turn_metrics import TTSChunkLog, TurnMetricsObserver
 
-REFERENCE_WAV = Path(os.environ.get("VOICE_REFERENCE", "voice_ref/reference.wav"))
+if TYPE_CHECKING:
+    from pipecat.pipeline.worker import PipelineWorker
+    from pipecat.processors.aggregators.llm_context import LLMContext
+
+    from meeting_mode import MeetingGate
+    from mic_gate import MicGate
 
 # 1.0 is natural rate. Speeds above 1.0 play faster but can sound echoey.
 DEFAULT_SPEED = 1.0
@@ -138,6 +125,36 @@ def build_pipeline(
     bus=None,
     metrics_jsonl: Path | None = None,
 ) -> BuiltPipeline:
+    # Heavy imports live here, not at module top: they cost ~3.5s and aren't
+    # needed until a session actually starts (see _warm_imports).
+    from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
+    from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
+    from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_analyzer import VADParams
+    from pipecat.pipeline.pipeline import Pipeline
+    from pipecat.pipeline.worker import PipelineParams, PipelineWorker
+    from pipecat.processors.aggregators.llm_context import LLMContext
+    from pipecat.processors.aggregators.llm_response_universal import (
+        LLMContextAggregatorPair,
+        LLMUserAggregatorParams,
+    )
+    from pipecat.services.openai.llm import OpenAILLMService
+    from pipecat.transports.local.audio import (
+        LocalAudioTransport,
+        LocalAudioTransportParams,
+    )
+    from pipecat.turns.user_mute import AlwaysUserMuteStrategy
+    from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
+    from pipecat.turns.user_turn_strategies import UserTurnStrategies
+
+    from meeting_mode import MeetingGate
+    from mic_gate import MicGate
+    from stt_parakeet import ParakeetMLXSTTService
+    from transcript_tap import TranscriptTap
+    from tts_chatterbox import ChatterboxTTSService
+    from tts_normalize import TTSNormalizeFilter
+    from turn_metrics import TTSChunkLog, TurnMetricsObserver
+
     config = config or SessionConfig()
     # Seed the live controls from the session's starting speed; the TUI mutates
     # this same object in place while the pipeline runs.
@@ -174,7 +191,9 @@ def build_pipeline(
     chunk_log = TTSChunkLog()
 
     tts = ChatterboxTTSService(
-        reference_wav=REFERENCE_WAV,
+        # Read at call time, so a voice cloned earlier in this same TUI
+        # process is picked up without a restart.
+        reference_wav=reference_path(),
         controls=controls,
         chunk_log=chunk_log,
         # Rewrites LLM output into speakable form ("..." would be spoken as
@@ -260,14 +279,17 @@ def build_pipeline(
     )
 
 
-def _check_prerequisites():
+def _check_prerequisites(*, console: bool):
     if not os.environ.get("DEEPSEEK_API_KEY"):
         logger.error("DEEPSEEK_API_KEY is not set")
         sys.exit(1)
-    if not REFERENCE_WAV.exists():
+    # The TUI has an in-app clone flow, so a missing reference is a setup-screen
+    # state there, not a fatal error. The console flow has no way to fix it, so
+    # it still fails fast.
+    if console and not reference_path().exists():
         logger.error(
-            f"Voice reference missing: {REFERENCE_WAV} — "
-            "run scripts/capture_reference.py first (see README.md)"
+            f"Voice reference missing: {reference_path()} — "
+            "run without --console and use 'Clone a voice' (see README.md)"
         )
         sys.exit(1)
 
@@ -276,6 +298,8 @@ def _make_respond(gate: MeetingGate | None, worker: PipelineWorker):
     """A press-'r' handler for meeting mode: release one held reply."""
 
     def on_r():
+        from pipecat.frames.frames import LLMRunFrame
+
         if gate is None:
             return
         if gate.held == 0:
@@ -297,6 +321,8 @@ def _make_speak(worker: PipelineWorker):
     """
 
     def speak(text: str):
+        from pipecat.frames.frames import TTSSpeakFrame
+
         text = text.strip()
         if not text:
             return
@@ -334,6 +360,10 @@ async def run_cli():
     from datetime import datetime
 
     config = get_session_config()
+
+    from pipecat.workers.runner import WorkerRunner
+
+    from meeting_mode import install_key_listener
     logger.info(
         f"Session: scenario={config.scenario or '(none)'} speed={config.speed} "
         f"mode={'half' if config.half_duplex else 'full'}-duplex"
@@ -359,6 +389,21 @@ async def run_cli():
     finally:
         if restore:
             restore()
+
+
+def _warm_imports() -> None:
+    """Pay the ~3.5s pipecat/torch import cost in a background thread while the
+    user is on the setup screen, so clicking Start doesn't stall on it."""
+    try:
+        import pipecat.audio.turn.smart_turn.local_smart_turn_v3  # noqa: F401
+        import pipecat.services.openai.llm  # noqa: F401
+        import pipecat.transports.local.audio  # noqa: F401
+        import pipecat.workers.runner  # noqa: F401
+
+        import stt_parakeet  # noqa: F401
+        import tts_chatterbox  # noqa: F401
+    except Exception:
+        logger.exception("background import warm-up failed (retried on session start)")
 
 
 async def run_tui():
@@ -397,10 +442,16 @@ async def run_tui():
 
     controls = RuntimeControls()
     bus = TranscriptBus()
-    runners: list[WorkerRunner] = []
+    runners: list = []
     run_tasks: list[asyncio.Task] = []
 
+    # Pay the pipecat/torch import cost in the background while the user is on
+    # the setup screen, so Start doesn't stall on it.
+    warm_task = asyncio.create_task(asyncio.to_thread(_warm_imports))
+
     async def start_session(setup: SessionSetup):
+        from pipecat.workers.runner import WorkerRunner
+
         config = SessionConfig(
             scenario=setup.scenario,
             half_duplex=setup.half_duplex,
@@ -426,6 +477,7 @@ async def run_tui():
         controls=controls,
         bus=bus,
         scenario_default=_scenario_from_argv(),
+        reference_path=reference_path(),
         start_session=start_session,
         log_queue=log_queue,
         on_ready=on_ready,
@@ -450,10 +502,11 @@ async def run_tui():
 
 
 async def main():
-    _check_prerequisites()
     # The Textual TUI is the default; --console opts into the classic
     # prompts + log-stream flow. (--tui is still accepted as an explicit no-op.)
-    if "--console" in sys.argv:
+    console = "--console" in sys.argv
+    _check_prerequisites(console=console)
+    if console:
         await run_cli()
     else:
         await run_tui()

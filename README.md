@@ -83,33 +83,41 @@ The scenario you enter at startup (see Run) is appended to the end of this promp
 at runtime; the persona text itself stays byte-stable so the LLM's prefix cache
 stays warm.
 
-### 2. Record the voice reference
+### 2. Clone the voice (in the TUI)
 
-Chatterbox clones a voice from a single ~12-second reference clip. Capture a
-longer sample, then cut and compare several candidate windows:
+Chatterbox clones a voice from a single ~12-second reference clip. The TUI
+walks you through it: run `uv run python main.py`, click **Clone a voice…** on
+the setup screen, then:
+
+1. **Record** — one sample, 30s or more. Quiet damped room, macOS mic mode on
+   Standard (no Voice Isolation), talk naturally: a question, a statement,
+   normal energy. Reverb in the recording becomes permanent reverb in the
+   clone.
+2. **Build previews** — the app slices several candidate 12s windows spread
+   across the capture (no ffmpeg — Chatterbox conditions the whole clone on
+   whichever window it gets, and different windows clone noticeably
+   differently, so the spread is the comparison), loads Chatterbox once, and
+   synthesizes one fixed preview sentence per candidate.
+3. **Listen and pick** — play each candidate, hit **use this voice** on the
+   winner. It becomes `voice_ref/reference.wav` and the session uses it
+   immediately — no restart.
+
+The setup screen's **Start session** stays disabled until a reference exists,
+so a first run can't fail deep inside model loading.
+
+Prefer an objective score over an ear pick? The offline eval (Parakeet WER +
+resemblyzer similarity over a fixed 10-sentence set) still works, pointed at
+the same candidate windows the TUI cut:
 
 ```bash
-uv run python scripts/capture_reference.py         # 90s raw capture → voice_ref/capture_full.wav
-
-# Cut SEVERAL 12s candidate windows from different parts of the capture (vary -ss).
-# Chatterbox conditions the whole clone on whichever ~12s you give it, so different
-# windows produce noticeably different clones — the point of this step is comparing them:
-ffmpeg -i voice_ref/capture_full.wav -ss 5  -t 12 voice_ref/cand_a.wav
-ffmpeg -i voice_ref/capture_full.wav -ss 30 -t 12 voice_ref/cand_b.wav
-ffmpeg -i voice_ref/capture_full.wav -ss 60 -t 12 voice_ref/cand_c.wav
-
-uv run --with resemblyzer python scripts/eval_clone.py --real voice_ref/capture_full.wav voice_ref/cand_*.wav
-
-# eval output: scratch_clone_eval/<candidate>/0..9.wav are the ten fixed TEST
-# SENTENCES synthesized from that candidate — you never pick one of those.
-# Judge each CANDIDATE by its WER/similarity line + listening across its ten
-# outputs, then promote the winning candidate:
-cp voice_ref/cand_<winner>.wav voice_ref/reference.wav
+uv run --with resemblyzer python scripts/eval_clone.py \
+    --real voice_ref/capture_full.wav voice_ref/candidates/cand_*.wav
+# then promote the winning CANDIDATE (not one of its test sentences):
+cp voice_ref/candidates/cand_<winner>.wav voice_ref/reference.wav
 ```
 
-Capture rules: quiet damped room, macOS mic mode set to Standard (no Voice
-Isolation), talk naturally, include a question and a statement. Reverb in the
-reference becomes permanent reverb in the clone.
+(The fully manual scripted flow — `scripts/capture_reference.py` + your own
+ffmpeg window cuts — also still works; it all ends at `voice_ref/reference.wav`.)
 
 > Only clone a voice you have the right to use — your own, or one you have clear
 > permission to reproduce. `voice_ref/` is gitignored and never distributed.
@@ -176,6 +184,9 @@ The default interface is a [Textual](https://textual.textualize.io) app (pass
 
 - **Setup screen** — the same four questions (scenario, mic mode, response
   mode), on screen. Voice speed moves to a live slider, so it isn't asked here.
+  A **Clone a voice…** button runs the record → preview → pick workflow (see
+  above) right from setup; **Start session** stays disabled until a voice
+  reference exists.
 - **Conversation pane** — only what was said and what the agent spoke; no logs.
   (Logs are redirected to `logs/parrotbox-<timestamp>.log`.)
 - **Voice sliders** — Exaggeration, Temperature, CFG weight, Speed, and Volume,
