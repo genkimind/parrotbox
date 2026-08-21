@@ -4,8 +4,11 @@ See ARCHITECTURE.md for the full design. The Textual interface is the default:
 on-screen setup, a live conversation pane, and sliders for
 exaggeration/temperature/cfg_weight/speed/volume that take effect mid-session.
 Logs go to logs/ instead of the console in that mode.
-
     DEEPSEEK_API_KEY=... uv run python main.py
+
+Or via OpenRouter (any of their models; see llm_provider.py):
+
+    OPENROUTER_API_KEY=... uv run python main.py
 
 Add --console for the classic prompts + log-stream flow:
 
@@ -32,6 +35,7 @@ from loguru import logger
 # imported lazily inside the functions below so the TUI's setup screen renders
 # immediately instead of after a multi-second blank.
 from clone_voice import reference_path
+from llm_provider import llm_base_url, llm_model, resolve_llm_provider
 from persona import build_system_prompt
 from runtime_controls import RuntimeControls
 
@@ -173,16 +177,12 @@ def build_pipeline(
         )
     )
 
-    stt = ParakeetMLXSTTService()
-
+    provider = resolve_llm_provider()
     llm = OpenAILLMService(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
+        base_url=llm_base_url(provider),
         settings=OpenAILLMService.Settings(
-            model=os.environ.get("LLM_MODEL", "deepseek-v4-flash"),
-            # Flash is a reasoning model; thinking tokens add ~350ms before the
-            # first content token (measured), worth nothing in a voice turn.
-            extra={"extra_body": {"thinking": {"type": "disabled"}}},
+            model=llm_model(provider),
+            extra={"extra_body": provider.extra_body},
         ),
     )
 
@@ -280,8 +280,16 @@ def build_pipeline(
 
 
 def _check_prerequisites(*, console: bool):
-    if not os.environ.get("DEEPSEEK_API_KEY"):
-        logger.error("DEEPSEEK_API_KEY is not set")
+    try:
+        provider = resolve_llm_provider()
+    except ValueError as e:
+        logger.error(str(e))
+        sys.exit(1)
+    if not os.environ.get(provider.api_key_env):
+        logger.error(
+            f"{provider.api_key_env} is not set (provider: {provider.name} — "
+            "set a key or choose another provider via LLM_PROVIDER)"
+        )
         sys.exit(1)
     # The TUI has an in-app clone flow, so a missing reference is a setup-screen
     # state there, not a fatal error. The console flow has no way to fix it, so

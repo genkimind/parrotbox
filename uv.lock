@@ -2205,12 +2205,12 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "chatterbox-tts", specifier = ">=0.1.7" },
-    { name = "parakeet-mlx", specifier = ">=0.5.2" },
-    { name = "pipecat-ai", extras = ["local", "openai", "silero"], specifier = ">=1.6.0" },
-    { name = "pyrubberband", specifier = ">=0.4.0" },
+    { name = "chatterbox-tts", specifier = "==0.1.7" },
+    { name = "parakeet-mlx", specifier = "==0.5.2" },
+    { name = "pipecat-ai", extras = ["local", "openai", "silero"], specifier = "==1.6.0" },
+    { name = "pyrubberband", specifier = "==0.4.0" },
     { name = "setuptools", specifier = "<81" },
-    { name = "textual", specifier = ">=8.2.8" },
+    { name = "textual", specifier = "==8.2.8" },
 ]
 
 [[package]]

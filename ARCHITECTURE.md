@@ -16,7 +16,7 @@ measured numbers where marked **[measured]**.
 | VAD | Silero (Pipecat built-in) | `confidence=0.7, start_secs=0.2, stop_secs=0.2, min_volume=0.6` |
 | Turn detection | Smart Turn v3 (`LocalSmartTurnAnalyzerV3`, built-in) | ~8M params, 12–30 ms CPU. Lets Silero `stop_secs` drop 0.8 → 0.2 s — the cheapest 600 ms available |
 | STT | Parakeet TDT 0.6B **v3** via **parakeet-mlx** | Replaces parakeet-rs/ONNX plan: native Metal via MLX, pure Python, streaming API. v3 over v2: English WER delta <1 pt (noise in agent context), Spanish for free |
-| LLM | Hosted, OpenAI-compatible (DeepSeek) | `OpenAILLMService(base_url=...)`. TTFT is the dominant, highest-variance latency term — measure from local network before committing |
+| LLM | Hosted, OpenAI-compatible (DeepSeek direct by default; OpenRouter via `OPENROUTER_API_KEY` as the gateway/fallback profile) | `OpenAILLMService(base_url=...)`, profiles in `llm_provider.py`. TTFT is the dominant, highest-variance latency term — measure from local network before committing |
 | TTS | **Chatterbox-Turbo** (350M, MIT, official MPS) | Replaces base Chatterbox (500M): smaller, faster, built for agent loops, same `audio_prompt_path` cloning. **Batch-only upstream — no streaming synthesis** |
 | Orchestration | Pipecat (current) | No first-class local Parakeet or local Chatterbox services → two custom services (this repo) |
 
@@ -68,8 +68,8 @@ Paths back toward the target, in order of expected payoff:
 
 Critical path is fully serial. After the first chunk, everything overlaps (chunk n plays
 while n+1 synthesizes and the LLM streams). Biggest single win: LLM provider TTFT.
-Second: eager first-clause TTS chunking (in the design). Later optimization: streaming
-STT during speech cuts finalize to ~50 ms.
+Second: eager first-clause TTS chunking (in the design). Streaming STT during speech
+was evaluated and rejected for now — see "Streaming handoffs" below.
 
 ## Streaming handoffs
 
@@ -94,6 +94,27 @@ STT during speech cuts finalize to ~50 ms.
   davidbrowne17/chatterbox-streaming fork adds token-loop streaming for *base*
   Chatterbox; Turbo compatibility unknown. Evaluate only after the batch pipeline works
   — would cut first-audio by 300–500 ms.
+- **Streaming STT — evaluated, not shipped (2026-08-21, parakeet-mlx 0.5.2).** The
+  earlier projection ("streaming STT during speech cuts finalize to ~50 ms") assumed
+  incremental encoding; the installed implementation doesn't work that way. Measured
+  (`scripts/check_stt.py --streaming`):
+
+  - `add_audio()` re-decodes the whole *draft region* on every call; its size is
+    `context_size[1] × depth` frames (default (256,256) ≈ 16 s). Utterances shorter
+    than that never finalize mid-speech, so every feed costs a near-full pass:
+    ~180–235 ms per 320 ms chunk, RTF ~0.4–0.7 — during-speech only, but it makes the
+    stop-time tail flush ≈ one full-window pass.
+  - Finalize at VAD stop is therefore "last-chunk cost", not ~free: ~235 ms at
+    ctx=(256,256) ≈ batch; ~130–150 ms at ctx=(64,64); hard floor ~90 ms even at
+    (16,16) — the projected ~50 ms is unreachable in this version.
+  - Quality: batch-equal on clean TTS audio, but on the real reference recording
+    ctx=(64,64) drops onset words and mangles tails ("bank" → "bunk"); narrow-right
+    contexts ((256,16) etc.) collapse entirely.
+
+  Verdict: batch finalize (~250 ms warm) stays; streaming buys ≤100 ms at best and
+  costs transcript accuracy where it hurts. Re-run the harness if parakeet-mlx ships
+  cheaper incremental decoding — ship only when last-chunk cost lands well under
+  batch at batch-equal text.
 
 ## Barge-in design
 

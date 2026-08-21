@@ -15,9 +15,11 @@ Design and rationale: [ARCHITECTURE.md](ARCHITECTURE.md).
   on Intel Macs, Windows, or Linux.
 - ~6 GB free memory while running; ~16 GB machine or larger recommended.
 - [`uv`](https://docs.astral.sh/uv/) for dependency management.
-- An OpenAI-compatible LLM endpoint. The default is DeepSeek — you need a
-  `DEEPSEEK_API_KEY`. Any OpenAI-compatible provider works via `LLM_BASE_URL` /
-  `LLM_MODEL` (see the bottom of this file).
+- An OpenAI-compatible LLM endpoint. Two built-in profiles (see
+  `llm_provider.py`): DeepSeek direct (`DEEPSEEK_API_KEY`, the measured
+  default) or OpenRouter (`OPENROUTER_API_KEY`, one key for any of their
+  models — handy as the low-TTFT fallback). `LLM_PROVIDER` picks explicitly
+  when both keys exist.
 
 ## Setup
 
@@ -127,7 +129,7 @@ spam, and live voice sliders) is the **default** — see [TUI](#tui) below:
 
 ```bash
 DEEPSEEK_API_KEY=... uv run python main.py                       # Textual interface (default)
-DEEPSEEK_API_KEY=... uv run python main.py daily standup         # scenario from argv, skips that prompt
+OPENROUTER_API_KEY=... uv run python main.py daily standup       # same, via OpenRouter
 ```
 
 Prefer a plain console? Add `--console` for the classic prompts + log-stream flow:
@@ -260,9 +262,14 @@ to split on, so it synthesizes as one long chunk. That needs streaming synthesis
 
 ## Configuration (environment variables)
 
-- `DEEPSEEK_API_KEY` — required for the default DeepSeek endpoint.
-- `LLM_MODEL`, `LLM_BASE_URL` — point at any OpenAI-compatible provider/model.
-  Defaults target DeepSeek.
+- `DEEPSEEK_API_KEY` — API key for the default DeepSeek-direct endpoint.
+- `OPENROUTER_API_KEY` — API key for the OpenRouter gateway instead; set this
+  (or `LLM_PROVIDER=openrouter`) to route the LLM through openrouter.ai.
+  Model slugs there are provider-prefixed, e.g. `deepseek/deepseek-v4-flash`.
+- `LLM_PROVIDER` — `deepseek` or `openrouter`; auto-detected from whichever
+  key is set otherwise (both set → DeepSeek unless named).
+- `LLM_MODEL`, `LLM_BASE_URL` — override the model / point at any
+  OpenAI-compatible provider. Defaults follow the resolved profile.
 - `VOICE_REFERENCE` — path to the reference WAV (default `voice_ref/reference.wav`).
 - `AUDIO_IN_DEVICE` / `AUDIO_OUT_DEVICE` — device indices for routing to a virtual
   device (e.g. BlackHole, for feeding other apps like Zoom); enumerate with

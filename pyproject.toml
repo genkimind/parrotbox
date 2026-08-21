@@ -5,18 +5,19 @@ requires-python = ">=3.12"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 dependencies = [
-    "chatterbox-tts>=0.1.7",
-    "parakeet-mlx>=0.5.2",
-    "pipecat-ai[local,openai,silero]>=1.6.0",
-    "pyrubberband>=0.4.0",
-    "setuptools<81",
-    "textual>=8.2.8",
+    # Exact pins: the app is verified against these versions (ARCHITECTURE.md
+    # "Verified against installed versions"), pipecat in particular has a
+    # history of breaking API across minor bumps. Bump deliberately, one at a
+    # time, re-running the scripts/ gates.
+    "chatterbox-tts==0.1.7",
+    "parakeet-mlx==0.5.2",
+    "pipecat-ai[local,openai,silero]==1.6.0",
+    "pyrubberband==0.4.0",
+    "setuptools<81",  # resemble-perth still imports pkg_resources
+    "textual==8.2.8",
 ]
 
 [tool.uv]
 # chatterbox-tts pins numpy<2.0 conservatively; parakeet-mlx requires >=2.2.5.
 # Chatterbox runs fine on numpy 2.x with torch 2.6 — verified by warmup synth.
 override-dependencies = ["numpy>=2.2.5"]
-
-[tool.uv.extra-build-dependencies]
-pkuseg = ["numpy", "cython", "setuptools"]

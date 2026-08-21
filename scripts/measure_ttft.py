@@ -4,7 +4,7 @@ This number decides whether the sub-1.5s end-to-end target is comfortable or a
 fight (see ARCHITECTURE.md latency budget). If p95 > 1s, pick a fallback
 provider now, before integrating.
 
-    DEEPSEEK_API_KEY=... uv run python scripts/measure_ttft.py [N]
+    DEEPSEEK_API_KEY=... or OPENROUTER_API_KEY=... uv run python scripts/measure_ttft.py [N]
 """
 
 import asyncio
@@ -12,8 +12,13 @@ import os
 import statistics
 import sys
 import time
+from pathlib import Path
 
-from openai import AsyncOpenAI
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from llm_provider import llm_base_url, llm_model, resolve_llm_provider  # noqa: E402
+
+from openai import AsyncOpenAI  # noqa: E402
 
 
 async def one_request(client: AsyncOpenAI, model: str) -> float:
@@ -34,11 +39,12 @@ async def one_request(client: AsyncOpenAI, model: str) -> float:
 
 async def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
+    provider = resolve_llm_provider()
     client = AsyncOpenAI(
-        api_key=os.environ["DEEPSEEK_API_KEY"],
-        base_url=os.environ.get("LLM_BASE_URL", "https://api.deepseek.com"),
+        api_key=os.environ[provider.api_key_env],
+        base_url=llm_base_url(provider),
     )
-    model = os.environ.get("LLM_MODEL", "deepseek-v4-flash")
+    model = llm_model(provider)
     results = []
     for i in range(n):
         try:
