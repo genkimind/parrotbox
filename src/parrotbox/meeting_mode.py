@@ -3,7 +3,7 @@
 The user aggregator adds each finished utterance to the shared LLMContext
 BEFORE pushing the LLMContextFrame that triggers a run, so swallowing those
 frames loses nothing — context keeps accumulating while the agent stays
-silent. On 'r', main.py arms the gate and queues an LLMRunFrame at the
+silent. On 'r', `parrotbox.main` arms the gate and queues an LLMRunFrame at the
 pipeline head; the user aggregator converts it into a fresh LLMContextFrame,
 which the armed gate passes through exactly once.
 """

@@ -66,11 +66,10 @@ def main():
         print(__doc__)
         sys.exit(1)
 
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from chatterbox.tts_turbo import ChatterboxTurboTTS
     from parakeet_mlx import from_pretrained
 
-    from chatterbox_compat import apply_mps_float64_patch
+    from parrotbox.chatterbox_compat import apply_mps_float64_patch
 
     apply_mps_float64_patch()
     tts = ChatterboxTurboTTS.from_pretrained(device="mps")

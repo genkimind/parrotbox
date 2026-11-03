@@ -1,6 +1,6 @@
 """Per-turn latency instrumentation.
 
-ARCHITECTURE.md asks for one stitched line per turn joining
+docs/ARCHITECTURE.md asks for one stitched line per turn joining
 `vad_stop → transcript → llm_first_token → tts_first_audio → playback`, plus
 per-chunk RTF over session time to catch thermal throttling. This module
 produces both, at INFO so they survive the default TUI log sink.

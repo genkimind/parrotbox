@@ -5,7 +5,7 @@ the Mac's microphone, transcribes speech locally, sends text to an
 OpenAI-compatible language model, and speaks the reply in a cloned voice.
 
 This document describes the system that exists today. Benchmark methodology
-and tuning results are in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+and tuning results are in [PERFORMANCE.md](PERFORMANCE.md).
 
 ## Scope and boundaries
 

@@ -193,7 +193,7 @@ class ClonePreviewer:
             return
         from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-        from chatterbox_compat import apply_mps_float64_patch, neutralize_tqdm_mp_lock
+        from .chatterbox_compat import apply_mps_float64_patch, neutralize_tqdm_mp_lock
 
         apply_mps_float64_patch()
         neutralize_tqdm_mp_lock()  # else tqdm's mp-lock spawn crashes under the TUI

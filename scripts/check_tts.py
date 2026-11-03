@@ -25,10 +25,9 @@ OUT_DIR = Path("scratch_tts_check")
 
 
 def main():
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-    from chatterbox_compat import apply_mps_float64_patch
+    from parrotbox.chatterbox_compat import apply_mps_float64_patch
 
     apply_mps_float64_patch()
     ref = sys.argv[1] if len(sys.argv) > 1 else None

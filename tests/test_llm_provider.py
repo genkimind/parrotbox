@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-import llm_provider
+from parrotbox import llm_provider
 
 
 class LLMProviderTests(unittest.TestCase):

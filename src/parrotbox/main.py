@@ -1,14 +1,14 @@
 """Apple Silicon voice agent: local STT → LLM endpoint → local cloned-voice TTS.
 
-See ARCHITECTURE.md for the full design. The Textual interface is the default:
+See docs/ARCHITECTURE.md for the full design. The Textual interface is the default:
 on-screen setup, a live conversation pane, and sliders for
 exaggeration/temperature/cfg_weight/speed/volume that take effect mid-session.
 Logs go to logs/ instead of the console in that mode.
-    DEEPSEEK_API_KEY=... uv run python main.py
+    DEEPSEEK_API_KEY=... uv run parrotbox
 
 Add --console for the classic prompts + log-stream flow:
 
-    DEEPSEEK_API_KEY=... uv run python main.py --console
+    DEEPSEEK_API_KEY=... uv run parrotbox --console
 """
 
 from __future__ import annotations
@@ -30,23 +30,23 @@ from loguru import logger
 # (smart-turn → torch, VAD, transports) costs ~3.5s of import time; it is all
 # imported lazily inside the functions below so the TUI's setup screen renders
 # immediately instead of after a multi-second blank.
-from clone_voice import reference_path
-from llm_provider import (
+from .clone_voice import reference_path
+from .llm_provider import (
     llm_api_key,
     llm_base_url,
     llm_config_errors,
     llm_model,
     resolve_llm_provider,
 )
-from persona import build_system_prompt
-from runtime_controls import RuntimeControls
+from .persona import build_system_prompt
+from .runtime_controls import RuntimeControls
 
 if TYPE_CHECKING:
     from pipecat.pipeline.worker import PipelineWorker
     from pipecat.processors.aggregators.llm_context import LLMContext
 
-    from meeting_mode import MeetingGate
-    from mic_gate import MicGate
+    from .meeting_mode import MeetingGate
+    from .mic_gate import MicGate
 
 # 1.0 is natural rate. Speeds above 1.0 play faster but can sound echoey.
 DEFAULT_SPEED = 1.0
@@ -153,13 +153,13 @@ def build_pipeline(
     from pipecat.turns.user_stop import TurnAnalyzerUserTurnStopStrategy
     from pipecat.turns.user_turn_strategies import UserTurnStrategies
 
-    from meeting_mode import MeetingGate
-    from mic_gate import MicGate
-    from stt_parakeet import ParakeetMLXSTTService
-    from transcript_tap import TranscriptTap
-    from tts_chatterbox import ChatterboxTTSService
-    from tts_normalize import TTSNormalizeFilter
-    from turn_metrics import TTSChunkLog, TurnMetricsObserver
+    from .meeting_mode import MeetingGate
+    from .mic_gate import MicGate
+    from .stt_parakeet import ParakeetMLXSTTService
+    from .transcript_tap import TranscriptTap
+    from .tts_chatterbox import ChatterboxTTSService
+    from .tts_normalize import TTSNormalizeFilter
+    from .turn_metrics import TTSChunkLog, TurnMetricsObserver
 
     config = config or SessionConfig()
     # Seed the live controls from the session's starting speed; the TUI mutates
@@ -373,7 +373,7 @@ async def run_cli():
 
     from pipecat.workers.runner import WorkerRunner
 
-    from meeting_mode import install_key_listener
+    from .meeting_mode import install_key_listener
     logger.info(
         f"Session: scenario={config.scenario or '(none)'} speed={config.speed} "
         f"mode={'half' if config.half_duplex else 'full'}-duplex"
@@ -410,8 +410,10 @@ def _warm_imports() -> None:
         import pipecat.transports.local.audio  # noqa: F401
         import pipecat.workers.runner  # noqa: F401
 
-        import stt_parakeet  # noqa: F401
-        import tts_chatterbox  # noqa: F401
+        from . import (
+            stt_parakeet,  # noqa: F401
+            tts_chatterbox,  # noqa: F401
+        )
     except Exception:
         logger.exception("background import warm-up failed (retried on session start)")
 
@@ -420,7 +422,7 @@ async def run_tui():
     import queue
     from datetime import datetime
 
-    from tui_app import ParrotboxApp, SessionHandles, SessionSetup, TranscriptBus
+    from .tui_app import ParrotboxApp, SessionHandles, SessionSetup, TranscriptBus
 
     # The TUI owns the screen, so logs never go to stderr. Two sinks: a
     # persistent file, and a DEBUG queue the boot screen tails during startup
@@ -522,5 +524,10 @@ async def main():
         await run_tui()
 
 
-if __name__ == "__main__":
+def cli() -> None:
+    """Run Parrotbox from the installed console script or module entry point."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    cli()

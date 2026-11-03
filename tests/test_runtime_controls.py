@@ -1,6 +1,6 @@
 import unittest
 
-from runtime_controls import PARAM_SPECS, RuntimeControls
+from parrotbox.runtime_controls import PARAM_SPECS, RuntimeControls
 
 
 class RuntimeControlsTests(unittest.TestCase):

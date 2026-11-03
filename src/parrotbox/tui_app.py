@@ -2,7 +2,7 @@
 and real-time synthesis sliders.
 
 The app owns no pipeline logic. It collects a SessionConfig on the setup
-screen, hands it to the `start_session` callback supplied by main.py, then
+screen, hands it to the `start_session` callback supplied by `parrotbox.main`, then
 shows the running conversation. Slider moves mutate the shared RuntimeControls
 in place — the TTS service reads it on the next chunk, so changes are audible
 within a sentence.
@@ -31,8 +31,8 @@ from textual.widgets import (
     Static,
 )
 
-import clone_voice
-from runtime_controls import PARAM_SPECS, ParamSpec, RuntimeControls
+from . import clone_voice
+from .runtime_controls import PARAM_SPECS, ParamSpec, RuntimeControls
 
 # Emitted (at DEBUG) by pipecat when the StartFrame reaches the end of the
 # pipeline — i.e. every model is loaded and warm. We watch the log stream for

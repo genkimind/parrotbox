@@ -1,8 +1,8 @@
 """Loads the system prompt from the persona file.
 
-Put your own persona in `persona.local.md` (gitignored — it stays on your
-machine and is never committed). If that file is absent, the tracked example
-`persona.md` is used instead. Edit the markdown, not this module.
+Put your own persona in `persona.local.md` in the directory where you launch
+Parrotbox (gitignored — it stays on your machine and is never committed). If
+that file is absent, the packaged `persona.example.md` is used instead.
 
 The scenario section is appended at the END so the persona block stays
 byte-identical across sessions: DeepSeek's prefix cache keys on the stable
@@ -12,8 +12,8 @@ prefix, making the resent prompt near-free after turn one.
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
-PERSONA_FILE = _HERE / "persona.md"           # tracked example, safe to publish
-LOCAL_PERSONA_FILE = _HERE / "persona.local.md"  # your real persona, gitignored
+PERSONA_FILE = _HERE / "persona.example.md"  # packaged fictional example
+LOCAL_PERSONA_FILE = Path.cwd() / "persona.local.md"  # private working-directory override
 
 
 def persona_path() -> Path:

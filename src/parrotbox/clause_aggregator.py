@@ -36,7 +36,7 @@ the first-chunk floor stays small.
 What the ramp cannot fix is a long sentence with no internal clause punctuation
 (the residual ~3s worst case); splitting those needs mid-clause breaks that
 Chatterbox renders badly. The real fix there is streaming synthesis — see
-ARCHITECTURE.md, "TTS chunking and playback continuity".
+docs/ARCHITECTURE.md, "TTS chunking and playback continuity".
 
 Tunable at runtime for A/B-ing against the per-turn numbers in
 logs/turns-*.jsonl (see turn_metrics.py) without editing code:

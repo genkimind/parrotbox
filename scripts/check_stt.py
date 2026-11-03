@@ -24,7 +24,7 @@ TEST_SENTENCE = (
 def bench_streaming(model, audio: np.ndarray) -> None:
     """Re-evaluation harness for streaming STT — NOT the production path.
 
-    ARCHITECTURE.md "Streaming STT — evaluated, not shipped" records why
+    docs/ARCHITECTURE.md "Streaming STT — evaluated, not shipped" records why
     (2026-08-21, parakeet-mlx 0.5.2): each add_audio re-decodes the draft
     region, so finalize ≈ one full-window pass and small attention contexts
     that shrink it cost visible WER on real voice. Re-run this when

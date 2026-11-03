@@ -97,5 +97,5 @@ The project uses these as engineering signals, not product SLAs:
 - no stale audio after interruption; and
 - conversation history matching only audio that was actually played.
 
-See [../ARCHITECTURE.md](../ARCHITECTURE.md) for the full concurrency,
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full concurrency,
 interruption, and context-reconciliation design.

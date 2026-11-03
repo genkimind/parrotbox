@@ -22,9 +22,9 @@ from loguru import logger
 from pipecat.frames.frames import ErrorFrame, Frame, StartFrame
 from pipecat.services.tts_service import TTSService
 
-from clause_aggregator import ClauseEagerAggregator
-from runtime_controls import RuntimeControls
-from turn_metrics import TTSChunkLog
+from .clause_aggregator import ClauseEagerAggregator
+from .runtime_controls import RuntimeControls
+from .turn_metrics import TTSChunkLog
 
 SLICE_SECS = 0.04  # small frames so the output transport can flush mid-chunk on barge-in
 
@@ -68,14 +68,14 @@ class ChatterboxTTSService(TTSService):
             if not self._reference_wav.exists():
                 raise FileNotFoundError(
                     f"Voice reference not found: {self._reference_wav} — "
-                    "record one (see ARCHITECTURE.md, 'Voice clone reference capture')"
+                    "record one (see docs/ARCHITECTURE.md, 'Voice clone reference capture')"
                 )
             await asyncio.get_running_loop().run_in_executor(self._executor, self._load)
 
     def _load(self):
         from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-        from chatterbox_compat import apply_mps_float64_patch, neutralize_tqdm_mp_lock
+        from .chatterbox_compat import apply_mps_float64_patch, neutralize_tqdm_mp_lock
 
         apply_mps_float64_patch()
         neutralize_tqdm_mp_lock()  # else tqdm's mp-lock spawn crashes under the TUI

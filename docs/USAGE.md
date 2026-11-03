@@ -3,10 +3,10 @@
 ## Persona
 
 Parrotbox loads `persona.local.md` when it exists and otherwise uses the
-tracked fictional example in `persona.md`:
+packaged fictional example in `src/parrotbox/persona.example.md`:
 
 ```bash
-cp persona.md persona.local.md
+cp src/parrotbox/persona.example.md persona.local.md
 ```
 
 Keep the persona concrete and behavioral. Six to ten short samples of real
@@ -36,15 +36,15 @@ Only clone your own voice or one you have explicit permission to reproduce.
 The Textual interface is the default:
 
 ```bash
-uv run python main.py
-uv run python main.py daily standup
+uv run parrotbox
+uv run parrotbox daily standup
 ```
 
 The plain console flow is also available:
 
 ```bash
-uv run python main.py --console
-uv run python main.py --console daily standup
+uv run parrotbox --console
+uv run parrotbox --console daily standup
 ```
 
 The console asks for a scenario, starting speed, mic mode, and response mode.

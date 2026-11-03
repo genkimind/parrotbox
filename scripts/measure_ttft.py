@@ -1,7 +1,7 @@
 """Build-order step 3: measure LLM time-to-first-token from this network.
 
 This number decides whether the sub-1.5s end-to-end target is comfortable or a
-fight (see ARCHITECTURE.md latency budget). If p95 > 1s, pick a fallback
+fight (see docs/ARCHITECTURE.md latency budget). If p95 > 1s, pick a fallback
 provider now, before integrating.
 
     DEEPSEEK_API_KEY=... uv run python scripts/measure_ttft.py [N]
@@ -11,13 +11,10 @@ import asyncio
 import statistics
 import sys
 import time
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from openai import AsyncOpenAI
 
-from openai import AsyncOpenAI  # noqa: E402
-
-from llm_provider import (  # noqa: E402
+from parrotbox.llm_provider import (
     llm_api_key,
     llm_base_url,
     llm_config_errors,

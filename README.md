@@ -47,7 +47,8 @@ flowchart LR
 ```
 
 The LLM is a replaceable endpoint, not an on-device claim. STT, turn detection,
-voice conditioning, and TTS run locally. See [ARCHITECTURE.md](ARCHITECTURE.md)
+voice conditioning, and TTS run locally. See
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 for pipeline mechanics and design trade-offs.
 
 ## Performance snapshot
@@ -112,8 +113,11 @@ profile; `LLM_MODEL` then names the model exposed by that endpoint.
 Then launch the Textual interface:
 
 ```bash
-uv run python main.py
+uv run parrotbox
 ```
+
+`uv run python -m parrotbox` is equivalent if you prefer the Python module
+form.
 
 On first run, choose **Clone a voice…** and record a sample. Parrotbox creates
 several 12-second candidate references, synthesizes the same preview for each,
@@ -124,11 +128,11 @@ Use only a voice you own or have explicit permission to reproduce.
 
 ## Persona and session controls
 
-The tracked `persona.md` is a fictional example. To keep a real persona out of
-Git, create the ignored local override:
+The packaged `persona.example.md` is fictional. To keep a real persona out of
+Git, copy it to the ignored working-directory override:
 
 ```bash
-cp persona.md persona.local.md
+cp src/parrotbox/persona.example.md persona.local.md
 ```
 
 The default interface provides a conversation pane plus live controls for
@@ -145,7 +149,7 @@ mode behavior, audio routing, and configuration—are in
 The fast checks do not load speech models:
 
 ```bash
-python -m unittest discover -s tests -v
+uv run python -m unittest discover -s tests -v
 uvx ruff check .
 uv run python scripts/check_chunking.py
 ```
@@ -166,12 +170,13 @@ runs only platform-independent unit and static checks.
 
 | Path | Purpose |
 |---|---|
-| `main.py` | Session configuration and Pipecat pipeline assembly |
-| `stt_parakeet.py` | Local segmented Parakeet/MLX service |
-| `tts_chatterbox.py` | Local Chatterbox/MPS service and interruption handling |
-| `clause_aggregator.py` | Latency/continuity-aware text chunking |
-| `turn_metrics.py` | End-to-end latency and playback-gap instrumentation |
-| `tui_app.py` | Textual setup, conversation, and live controls |
+| `src/parrotbox/` | Installable application package |
+| `src/parrotbox/main.py` | Session configuration and Pipecat pipeline assembly |
+| `src/parrotbox/stt_parakeet.py` | Local segmented Parakeet/MLX service |
+| `src/parrotbox/tts_chatterbox.py` | Local Chatterbox/MPS service and interruption handling |
+| `src/parrotbox/clause_aggregator.py` | Latency/continuity-aware text chunking |
+| `src/parrotbox/turn_metrics.py` | End-to-end latency and playback-gap instrumentation |
+| `src/parrotbox/tui_app.py` | Textual setup, conversation, and live controls |
 | `scripts/` | Stage benchmarks, diagnostics, and reference capture tools |
 | `tests/` | Platform-independent configuration and control tests |
 

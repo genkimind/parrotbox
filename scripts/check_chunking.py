@@ -21,13 +21,10 @@ session — gap_total_ms there is the ground truth this only estimates.
 
 import asyncio
 import sys
-from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from parrotbox.clause_aggregator import ClauseEagerAggregator
 
-from clause_aggregator import ClauseEagerAggregator  # noqa: E402
-
-RTF = 0.9  # measured steady-state Chatterbox-Turbo on MPS (ARCHITECTURE.md)
+RTF = 0.9  # measured steady-state Chatterbox-Turbo on MPS (docs/ARCHITECTURE.md)
 CHARS_PER_SEC = 24.0  # conversational speech rate
 UPSTREAM_SECS = 1.30  # measured STT finalize (~0.25) + LLM TTFT (~1.05)
 
