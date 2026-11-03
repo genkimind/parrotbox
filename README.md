@@ -1,12 +1,17 @@
 # Parrotbox
 
-**A low-latency, voice-cloning conversational agent built for Apple Silicon.**
+**Clone your voice. Give it any persona. Have real-time spoken conversations—on your Mac.**
 
-Parrotbox keeps speech recognition and speech synthesis on the Mac: microphone
-audio is transcribed with Parakeet on MLX, sent to a hosted **or local**
-OpenAI-compatible LLM endpoint, and spoken with a Chatterbox-Turbo voice clone
-on MPS. [Pipecat](https://github.com/pipecat-ai/pipecat) orchestrates the
-streaming pipeline, interruptions, turn detection, and conversation state.
+Parrotbox combines a short voice recording with a persona you define in
+Markdown to create a conversational agent that listens and answers aloud in
+real time. It can sound like you while taking on whatever identity, background,
+and speaking style you specify.
+
+Speech recognition and synthesis stay on the Mac: microphone audio is
+transcribed with Parakeet on MLX, sent to a hosted **or local** OpenAI-compatible
+LLM endpoint, and spoken with a Chatterbox-Turbo voice clone on MPS.
+[Pipecat](https://github.com/pipecat-ai/pipecat) orchestrates the streaming
+pipeline, interruptions, turn detection, and conversation state.
 
 > This is an engineering prototype for one user on macOS, not a hosted product.
 > It deliberately targets Apple Silicon rather than pretending to be portable.
