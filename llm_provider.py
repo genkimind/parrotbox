@@ -1,19 +1,12 @@
-"""Resolve the OpenAI-compatible LLM endpoint from the environment.
+"""Resolve DeepSeek or a custom OpenAI-compatible LLM endpoint.
 
-Two hosted profiles are selected by API key (or explicitly via
-``LLM_PROVIDER``):
+DeepSeek is the default and uses the ``deepseek-flash`` model with thinking
+disabled. Set ``LLM_BASE_URL`` and ``LLM_MODEL`` to use any other
+OpenAI-compatible endpoint, including OpenAI itself or a local server.
 
-  * `deepseek`   — the default: api.deepseek.com direct. Lowest measured TTFT
-    from this network (~1.05 s p50, see ARCHITECTURE.md latency budget).
-  * `openrouter` — openrouter.ai gateway: one key routes to any of their
-    models; useful as the low-TTFT fallback path or to A/B providers without
-    touching code. Model slugs are provider-prefixed
-    (`deepseek/deepseek-v4-flash`).
-
-Set ``LLM_BASE_URL`` and ``LLM_MODEL`` to use any other OpenAI-compatible
-endpoint, including a local server. ``LLM_API_KEY`` supplies generic auth and
-overrides a profile-specific key. Local servers that do not authenticate are
-given the harmless placeholder key required by the OpenAI client.
+``LLM_API_KEY`` supplies generic auth and overrides ``DEEPSEEK_API_KEY``. Local
+servers that do not authenticate receive the harmless placeholder key required
+by the OpenAI client.
 """
 
 from __future__ import annotations
@@ -43,14 +36,6 @@ DEEPSEEK = LLMProvider(
     extra_body={"thinking": {"type": "disabled"}},
 )
 
-OPENROUTER = LLMProvider(
-    name="openrouter",
-    api_key_env="OPENROUTER_API_KEY",
-    base_url="https://openrouter.ai/api/v1",
-    default_model="deepseek/deepseek-v4-flash",
-    extra_body={"reasoning": {"enabled": False}},
-)
-
 CUSTOM = LLMProvider(
     name="custom",
     api_key_env="LLM_API_KEY",
@@ -59,15 +44,11 @@ CUSTOM = LLMProvider(
     extra_body={},
 )
 
-PROVIDERS = {"custom": CUSTOM, "deepseek": DEEPSEEK, "openrouter": OPENROUTER}
+PROVIDERS = {"custom": CUSTOM, "deepseek": DEEPSEEK}
 
 
 def resolve_llm_provider() -> LLMProvider:
-    """Pick a provider: explicit choice, custom endpoint, then available key.
-
-    With both keys set, DeepSeek-direct stays the measured default unless
-    OpenRouter is named explicitly.
-    """
+    """Use an explicit profile, a configured custom endpoint, or DeepSeek."""
     explicit = os.environ.get("LLM_PROVIDER", "").strip().lower()
     if explicit:
         if explicit not in PROVIDERS:
@@ -77,10 +58,6 @@ def resolve_llm_provider() -> LLMProvider:
         return PROVIDERS[explicit]
     if os.environ.get("LLM_BASE_URL"):
         return CUSTOM
-    if os.environ.get("DEEPSEEK_API_KEY"):
-        return DEEPSEEK
-    if os.environ.get("OPENROUTER_API_KEY"):
-        return OPENROUTER
     return DEEPSEEK
 
 

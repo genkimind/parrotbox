@@ -100,15 +100,14 @@ export AUDIO_OUT_DEVICE=3
 
 | Variable | Purpose |
 |---|---|
-| `DEEPSEEK_API_KEY` | DeepSeek-direct profile key |
-| `OPENROUTER_API_KEY` | OpenRouter profile key |
-| `LLM_PROVIDER` | Explicitly select `deepseek`, `openrouter`, or `custom` |
+| `DEEPSEEK_API_KEY` | DeepSeek key; defaults to `deepseek-flash` with thinking disabled |
+| `LLM_PROVIDER` | Explicitly select `deepseek` or `custom` |
 | `LLM_BASE_URL` | Custom OpenAI-compatible endpoint; auto-selects `custom` |
 | `LLM_MODEL` | Override the profile model; required for `custom` |
 | `LLM_API_KEY` | Generic auth override for any profile; optional for unauthenticated local servers |
 
-DeepSeek remains the default when both hosted keys are present. A custom
-endpoint uses no provider-specific request options.
+DeepSeek is the default when no custom base URL is set. A custom endpoint uses
+no provider-specific request options.
 
 ## Other configuration
 

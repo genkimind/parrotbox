@@ -15,19 +15,6 @@ class LLMProviderTests(unittest.TestCase):
         self.assertIs(provider, llm_provider.DEEPSEEK)
         self.assertEqual(provider.default_model, "deepseek-flash")
 
-    def test_detects_available_hosted_key(self):
-        self.assertIs(
-            self.resolve_with(OPENROUTER_API_KEY="secret"),
-            llm_provider.OPENROUTER,
-        )
-
-    def test_deepseek_wins_when_both_hosted_keys_are_present(self):
-        provider = self.resolve_with(
-            DEEPSEEK_API_KEY="deepseek",
-            OPENROUTER_API_KEY="openrouter",
-        )
-        self.assertIs(provider, llm_provider.DEEPSEEK)
-
     def test_custom_url_selects_provider_neutral_profile(self):
         provider = self.resolve_with(
             LLM_BASE_URL="http://127.0.0.1:8000/v1",
@@ -38,10 +25,10 @@ class LLMProviderTests(unittest.TestCase):
 
     def test_explicit_provider_wins(self):
         provider = self.resolve_with(
-            LLM_PROVIDER="openrouter",
+            LLM_PROVIDER="deepseek",
             LLM_BASE_URL="http://127.0.0.1:8000/v1",
         )
-        self.assertIs(provider, llm_provider.OPENROUTER)
+        self.assertIs(provider, llm_provider.DEEPSEEK)
 
     def test_rejects_unknown_provider(self):
         with patch.dict(os.environ, {"LLM_PROVIDER": "unknown"}, clear=True):

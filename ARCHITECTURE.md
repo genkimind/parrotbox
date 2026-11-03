@@ -234,9 +234,9 @@ segment. The evaluation remains available through
 
 ## LLM, persona, and conversation state
 
-`llm_provider.py` supports DeepSeek, OpenRouter, and any custom
-OpenAI-compatible endpoint. A custom endpoint can be hosted or local. Provider
-profiles supply their own model defaults and request options; the custom
+`llm_provider.py` uses DeepSeek by default and accepts any custom
+OpenAI-compatible endpoint. A custom endpoint can be hosted or local. The
+DeepSeek profile supplies its model default and disables thinking; the custom
 profile sends no provider-specific options.
 
 `persona.py` loads `persona.local.md` when present and otherwise uses the

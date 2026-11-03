@@ -6,10 +6,6 @@ exaggeration/temperature/cfg_weight/speed/volume that take effect mid-session.
 Logs go to logs/ instead of the console in that mode.
     DEEPSEEK_API_KEY=... uv run python main.py
 
-Or via OpenRouter (any of their models; see llm_provider.py):
-
-    OPENROUTER_API_KEY=... uv run python main.py
-
 Add --console for the classic prompts + log-stream flow:
 
     DEEPSEEK_API_KEY=... uv run python main.py --console

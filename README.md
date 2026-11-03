@@ -26,8 +26,8 @@ pipeline, interruptions, turn detection, and conversation state.
   output, so an interrupted reply contains only words the user actually heard.
 - **Measured, not guessed:** per-turn STT/LLM/TTS latency, playback gaps, and
   per-chunk real-time factor are written to JSONL for analysis.
-- **Provider-neutral LLM boundary:** DeepSeek and OpenRouter profiles are built
-  in; any OpenAI-compatible server can be supplied with environment variables.
+- **Provider-neutral LLM boundary:** DeepSeek works out of the box; any
+  OpenAI-compatible server can be supplied with environment variables.
 
 ## Architecture
 
@@ -95,11 +95,8 @@ uv sync --frozen
 Choose one LLM configuration:
 
 ```bash
-# DeepSeek direct
+# DeepSeek direct (deepseek-flash, thinking disabled)
 export DEEPSEEK_API_KEY=...
-
-# Or OpenRouter
-export OPENROUTER_API_KEY=...
 
 # Or any hosted/local OpenAI-compatible server
 export LLM_BASE_URL=http://127.0.0.1:8000/v1
@@ -107,6 +104,10 @@ export LLM_MODEL=your-model-name
 # Optional when that server requires authentication:
 export LLM_API_KEY=...
 ```
+
+With only `DEEPSEEK_API_KEY` set, Parrotbox uses `https://api.deepseek.com`
+and the `deepseek-flash` model. Setting `LLM_BASE_URL` switches to the generic
+profile; `LLM_MODEL` then names the model exposed by that endpoint.
 
 Then launch the Textual interface:
 

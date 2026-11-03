@@ -4,7 +4,7 @@ This number decides whether the sub-1.5s end-to-end target is comfortable or a
 fight (see ARCHITECTURE.md latency budget). If p95 > 1s, pick a fallback
 provider now, before integrating.
 
-    DEEPSEEK_API_KEY=... or OPENROUTER_API_KEY=... uv run python scripts/measure_ttft.py [N]
+    DEEPSEEK_API_KEY=... uv run python scripts/measure_ttft.py [N]
 """
 
 import asyncio
