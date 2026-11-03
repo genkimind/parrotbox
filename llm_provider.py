@@ -39,7 +39,7 @@ DEEPSEEK = LLMProvider(
     name="deepseek",
     api_key_env="DEEPSEEK_API_KEY",
     base_url="https://api.deepseek.com",
-    default_model="deepseek-v4-flash",
+    default_model="deepseek-flash",
     extra_body={"thinking": {"type": "disabled"}},
 )
 

@@ -11,7 +11,9 @@ class LLMProviderTests(unittest.TestCase):
             return llm_provider.resolve_llm_provider()
 
     def test_defaults_to_deepseek(self):
-        self.assertIs(self.resolve_with(), llm_provider.DEEPSEEK)
+        provider = self.resolve_with()
+        self.assertIs(provider, llm_provider.DEEPSEEK)
+        self.assertEqual(provider.default_model, "deepseek-flash")
 
     def test_detects_available_hosted_key(self):
         self.assertIs(
