@@ -1,304 +1,185 @@
-# parrotbox — local voice agent in a cloned voice
+# Parrotbox
 
-A single-user voice agent that talks *as* a chosen persona, in a cloned voice,
-running locally on a Mac. Mic → Parakeet STT (MLX) → DeepSeek → Chatterbox-Turbo
-voice clone (MPS) → speaker, orchestrated by Pipecat. It listens on your mic and
-answers out loud in a voice cloned from a short reference recording, staying in a
-persona you define in `persona.md`.
+**A low-latency, voice-cloning conversational agent built for Apple Silicon.**
 
-Design and rationale: [ARCHITECTURE.md](ARCHITECTURE.md).
+Parrotbox keeps speech recognition and speech synthesis on the Mac: microphone
+audio is transcribed with Parakeet on MLX, sent to a hosted **or local**
+OpenAI-compatible LLM endpoint, and spoken with a Chatterbox-Turbo voice clone
+on MPS. [Pipecat](https://github.com/pipecat-ai/pipecat) orchestrates the
+streaming pipeline, interruptions, turn detection, and conversation state.
+
+> This is an engineering prototype for one user on macOS, not a hosted product.
+> It deliberately targets Apple Silicon rather than pretending to be portable.
+
+## Engineering highlights
+
+- **Local speech stack:** Parakeet TDT 0.6B v3 on MLX for STT and
+  Chatterbox-Turbo on MPS for voice-cloned TTS.
+- **Responsive conversation:** smart turn detection, barge-in, eager clause
+  chunking, and live synthesis controls without model reloads.
+- **Honest interruption state:** assistant history is recorded after audio
+  output, so an interrupted reply contains only words the user actually heard.
+- **Measured, not guessed:** per-turn STT/LLM/TTS latency, playback gaps, and
+  per-chunk real-time factor are written to JSONL for analysis.
+- **Provider-neutral LLM boundary:** DeepSeek and OpenRouter profiles are built
+  in; any OpenAI-compatible server can be supplied with environment variables.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Mac[Apple Silicon Mac]
+        Mic[Microphone] --> Turn[Silero VAD + Smart Turn]
+        Turn --> STT[Parakeet STT<br/>MLX, local]
+        STT --> Context[Pipecat context]
+        Context --> LLMClient[OpenAI-compatible client]
+        LLMClient --> Chunker[Clause-aware chunker]
+        Chunker --> TTS[Chatterbox-Turbo<br/>MPS, local]
+        TTS --> Speaker[Speaker]
+    end
+
+    LLMClient <--> Endpoint[LLM endpoint<br/>hosted or local]
+```
+
+The LLM is a replaceable endpoint, not an on-device claim. STT, turn detection,
+voice conditioning, and TTS run locally. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for pipeline mechanics and design trade-offs.
+
+## Performance snapshot
+
+Measurements below are from the documented reference setup (18 GB Apple
+Silicon MacBook Pro, pinned dependencies). They are evidence of the tuning
+process, not universal guarantees.
+
+| Stage | Observed result | Notes |
+|---|---:|---|
+| Parakeet STT finalize | 244–256 ms warm | 4.9 s clean test clip |
+| DeepSeek first content token | ~1.0–1.15 s | Network and provider dependent |
+| Chatterbox-Turbo synthesis | 0.73–0.97 RTF warm | MPS, batch synthesis |
+| End of speech → first audio | ~2.6–3.0 s typical | Sum of measured dominant components |
+
+The repository includes repeatable stage checks and machine-readable turn
+metrics. Methodology, caveats, and tuning guidance live in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## Requirements
 
-- **macOS on Apple Silicon** (M-series). STT (parakeet-mlx) and TTS
-  (Chatterbox-Turbo on MPS) both use Apple's Metal stack; this will not run as-is
-  on Intel Macs, Windows, or Linux.
-- ~6 GB free memory while running; ~16 GB machine or larger recommended.
-- [`uv`](https://docs.astral.sh/uv/) for dependency management.
-- An OpenAI-compatible LLM endpoint. Two built-in profiles (see
-  `llm_provider.py`): DeepSeek direct (`DEEPSEEK_API_KEY`, the measured
-  default) or OpenRouter (`OPENROUTER_API_KEY`, one key for any of their
-  models — handy as the low-TTFT fallback). `LLM_PROVIDER` picks explicitly
-  when both keys exist.
+| Requirement | Why |
+|---|---|
+| macOS on Apple Silicon (M-series) | MLX STT and MPS TTS are first-class targets |
+| Python 3.12+ | Declared in `pyproject.toml` |
+| ~6 GB free unified memory | Models remain resident during a session |
+| 16 GB system memory recommended | Leaves practical headroom for macOS and the endpoint client |
+| [`uv`](https://docs.astral.sh/uv/) | Dependency and lockfile management |
+| PortAudio and Rubber Band | Microphone I/O and pitch-preserving speed control |
+| OpenAI-compatible LLM endpoint | Hosted service or a server you run locally |
 
-## Setup
+Intel Macs, Windows, and Linux are not supported by the current MLX/MPS
+implementation. `pyproject.toml` and `uv.lock` are the dependency source of
+truth; there is intentionally no duplicate `requirements.txt`.
+
+## Quick start
+
+Install system and Python dependencies:
 
 ```bash
 brew install portaudio rubberband
-uv sync
+uv sync --frozen
 ```
 
-(`rubberband` is the time-stretch engine used by the voice **Speed** control; a
-phase vocoder was replaced with it because it left voiced speech sounding
-echoey. Speed changes shell out to the `rubberband` binary, so it must be on
-your `PATH`.)
-
-## Two things you must provide
-
-This repo ships with an **example persona** and **no voice reference** — the two
-things that make the agent sound like a specific person are intentionally left
-for you to supply:
-
-1. A **persona** — who the agent is and how it talks (`persona.md`).
-2. A **voice reference** — a short recording of the voice to clone
-   (`voice_ref/reference.wav`).
-
-### 1. Write the persona
-
-The system prompt is loaded from a persona markdown file at startup and never
-touched by code. The file that ships here, [`persona.md`](persona.md), is a
-clearly-marked **example** (a fictional woodworker named Robin Vale) that
-demonstrates the format.
-
-**To use your own persona without committing it, put it in `persona.local.md`.**
-That filename is gitignored, so your real persona stays on your machine and is
-never pushed; the code prefers it over the example when present. This lets you
-track this repo directly (pull code updates, push fixes) while keeping your
-identity — and your `voice_ref/` recording, also gitignored — entirely local. No
-second copy to maintain.
+Choose one LLM configuration:
 
 ```bash
-cp persona.md persona.local.md   # then edit persona.local.md with your own persona
+# DeepSeek direct
+export DEEPSEEK_API_KEY=...
+
+# Or OpenRouter
+export OPENROUTER_API_KEY=...
+
+# Or any hosted/local OpenAI-compatible server
+export LLM_BASE_URL=http://127.0.0.1:8000/v1
+export LLM_MODEL=your-model-name
+# Optional when that server requires authentication:
+export LLM_API_KEY=...
 ```
 
-A persona has two parts that matter most:
-
-- **Who they are and how they talk** — background, register, verbal tics. Keep it
-  concrete and behavioral ("get to the point, no pleasantries") rather than
-  abstract.
-- **Style samples** — six to ten short snippets of how the person actually
-  speaks. This is the single biggest lever on how the agent sounds. Real
-  transcript fragments work far better than invented ones. Six to ten short,
-  varied samples beat twenty long ones.
-
-  **Tip — capturing samples:** the easiest way to get natural samples is to just
-  talk and let something transcribe you. [Ghost Pepper](https://github.com/matthartman/ghost-pepper)
-  is a great on-device, local speech-to-text transcriber — highly recommended.
-  Just talk and it transcribes your words to text as you speak; paste those
-  transcripts straight into your Style samples.
-
-Keep the structural sections of the example file as-is (Interruptions, Rhythm and
-length, What not to do, The test) — those are what keep output speakable through
-text-to-speech, and are not persona-specific.
-
-The scenario you enter at startup (see Run) is appended to the end of this prompt
-at runtime; the persona text itself stays byte-stable so the LLM's prefix cache
-stays warm.
-
-### 2. Clone the voice (in the TUI)
-
-Chatterbox clones a voice from a single ~12-second reference clip. The TUI
-walks you through it: run `uv run python main.py`, click **Clone a voice…** on
-the setup screen, then:
-
-1. **Record** — one sample, 30s or more. Quiet damped room, macOS mic mode on
-   Standard (no Voice Isolation), talk naturally: a question, a statement,
-   normal energy. Reverb in the recording becomes permanent reverb in the
-   clone.
-2. **Build previews** — the app slices several candidate 12s windows spread
-   across the capture (no ffmpeg — Chatterbox conditions the whole clone on
-   whichever window it gets, and different windows clone noticeably
-   differently, so the spread is the comparison), loads Chatterbox once, and
-   synthesizes one fixed preview sentence per candidate.
-3. **Listen and pick** — play each candidate, hit **use this voice** on the
-   winner. It becomes `voice_ref/reference.wav` and the session uses it
-   immediately — no restart.
-
-The setup screen's **Start session** stays disabled until a reference exists,
-so a first run can't fail deep inside model loading.
-
-> Only clone a voice you have the right to use — your own, or one you have clear
-> permission to reproduce. `voice_ref/` is gitignored and never distributed.
-
-## Validate the stages (optional, recommended build order)
+Then launch the Textual interface:
 
 ```bash
-uv run python scripts/check_stt.py                 # STT accuracy + latency (gate: <300ms warm)
-DEEPSEEK_API_KEY=... uv run python scripts/measure_ttft.py   # LLM TTFT p50/p95 (gate: p95 <1s)
-uv run python scripts/check_tts.py                 # TTS on MPS + RTF (gate: warm RTF <1.0)
-uv run python scripts/check_chunking.py            # chunk policy: correctness + gap estimate
+uv run python main.py
 ```
 
-`check_chunking.py` needs no models and runs in a second — see
-[Latency and chunk tuning](#latency-and-chunk-tuning).
+On first run, choose **Clone a voice…** and record a sample. Parrotbox creates
+several 12-second candidate references, synthesizes the same preview for each,
+and lets you select the best one. The selected WAV stays under the gitignored
+`voice_ref/` directory.
 
-## Run
+Use only a voice you own or have explicit permission to reproduce.
 
-The Textual interface (setup on screen, a clean conversation pane instead of log
-spam, and live voice sliders) is the **default** — see [TUI](#tui) below:
+## Persona and session controls
+
+The tracked `persona.md` is a fictional example. To keep a real persona out of
+Git, create the ignored local override:
 
 ```bash
-DEEPSEEK_API_KEY=... uv run python main.py                       # Textual interface (default)
-OPENROUTER_API_KEY=... uv run python main.py daily standup       # same, via OpenRouter
+cp persona.md persona.local.md
 ```
 
-Prefer a plain console? Add `--console` for the classic prompts + log-stream flow:
+The default interface provides a conversation pane plus live controls for
+exaggeration, temperature, CFG weight, playback speed, and volume. It also
+supports typed speech, mic mute, context reset, and a meeting mode that listens
+silently until asked to respond.
+
+Full instructions—including reference-recording guidance, TUI keys, meeting
+mode behavior, audio routing, and configuration—are in
+[docs/USAGE.md](docs/USAGE.md).
+
+## Validation
+
+The fast checks do not load speech models:
 
 ```bash
-DEEPSEEK_API_KEY=... uv run python main.py --console                       # prompts for a scenario
-DEEPSEEK_API_KEY=... uv run python main.py --console daily scrum standup   # scenario from argv
+python -m unittest discover -s tests -v
+uvx ruff check .
+uv run python scripts/check_chunking.py
 ```
 
-In the classic console flow, startup asks four questions (enter accepts the default on each):
+The hardware/provider checks exercise one pipeline stage at a time:
 
-1. **Scenario** — short context that shapes register and tone for the session
-   ("scrum meeting", "chatting with a friend"); skipped if given on the command line
-2. **Voice speed** — pitch-preserving playback rate (default 1.0 = natural).
-   Values above 1.0 play faster but can sound echoey — nudge up carefully (1.05–1.2)
-3. **Mic mode** — full duplex (barge-in, needs headphones) or half duplex
-   (open speakers: mic muted while the agent talks, no barge-in — without this,
-   the mic hears the speakers and the agent converses with its own echo)
-4. **Response mode** — live (replies after every turn, the default) or meeting
-   (transcribes silently; press `r` to get one reply over everything heard so far)
-
-First start takes ~1 min (model loads + MPS shader warmup).
-
-### Meeting mode
-
-In meeting mode the agent listens and accumulates everything into context but
-says nothing until you press `r` (no Enter needed). It then responds once to
-what's directly relevant in the backlog and goes back to holding. Pressing `r`
-with nothing new logs "nothing new" and stays silent. Timing details: an
-utterance still in progress when you press `r` lands in the *next* reply, and
-pressing `r` while the agent is talking queues the reply behind the current
-one. Half duplex + meeting works but mutes the mic while the agent talks, so
-meeting speech during a reply is lost — full duplex with headphones is the
-better meeting setup.
-
-### TUI
-
-The default interface is a [Textual](https://textual.textualize.io) app (pass
-`--console` to get the plain prompts + log stream instead). It has three parts:
-
-- **Setup screen** — the same four questions (scenario, mic mode, response
-  mode), on screen. Voice speed moves to a live slider, so it isn't asked here.
-  A **Clone a voice…** button runs the record → preview → pick workflow (see
-  above) right from setup; **Start session** stays disabled until a voice
-  reference exists.
-- **Conversation pane** — only what was said and what the agent spoke; no logs.
-  (Logs are redirected to `logs/parrotbox-<timestamp>.log`.)
-- **Voice sliders** — Exaggeration, Temperature, CFG weight, Speed, and Volume,
-  adjustable *while talking*. Because Chatterbox takes these per synthesis call,
-  a change is audible within a sentence. The sliders run to deliberately wide
-  ceilings (well past the usual "safe" range) so there's headroom to push a
-  voice hard — the upper reaches get extreme and can distort, which is the point.
-  Volume defaults to 1.0 (100%) and goes up to 1.5, a +50% overboost for when
-  full macOS volume still isn't loud enough (it hard-limits, so it distorts hot).
-
-Keys: `↑`/`↓` pick a slider, `←`/`→` nudge it by 0.05 (`Shift` for a 0.50 jump),
-`t` types a line for the voice to speak, `m` mutes/unmutes the mic, `c` clears
-the conversation (press twice to confirm), `r` responds in meeting mode, `q`
-quits.
-
-Press `t` to type a line and have the clone speak it verbatim (Enter sends, Esc
-cancels) — handy for saying something exact without going through the model. The
-typed line shows in the conversation pane and is added to the session's context,
-so the agent knows it said it for the rest of the run. It isn't saved between
-runs.
-
-`m` toggles mic mute — while muted the agent hears nothing (the header shows
-🔇 mic muted). `c` starts a fresh conversation: it clears the pane and resets the
-model's context to just the system prompt, so nothing said earlier is
-remembered. Because that's destructive, it needs two presses — the first arms
-it (Esc or a 3-second pause cancels), the second confirms.
-
-Exaggeration is the emotion dial and the main knob — it has the thickest bar and
-is marked "adjust this first." Raise it for a more excited, animated delivery
-(the default 0.5 is a touch livelier than neutral); past ~0.7 it speeds up and
-gets theatrical, and the high end of the slider goes further still. Temperature
-and CFG weight are the secondary trims (shown as thinner bars — same length, just
-lighter): if it rushes at high exaggeration, raise CFG weight to slow the pacing
-back down.
-
-### Echo / headphones
-
-There is no echo cancellation. **Headphones are required for barge-in** (full
-duplex). On open speakers, pick half duplex at the mic-mode question — otherwise
-the mic hears the agent, barge-in triggers on its own voice, and it ends up
-conversing with its own echo (cut-off babble every few seconds).
-
-## Latency and chunk tuning
-
-Every turn writes one latency line to the log, plus a machine-readable record to
-`logs/turns-<timestamp>.jsonl`:
-
-```
-TURN ttfa=2.35s (stt 0.25s | llm 1.04s | tts 1.05s) chunks=3 audio=6.00s gaps=1.60s max=1.60s
+```bash
+uv run python scripts/check_stt.py
+uv run python scripts/measure_ttft.py
+uv run python scripts/check_tts.py
 ```
 
-`ttfa` is what you feel as "how long until it starts talking", broken into its
-three stages. **`gaps` is dead air *after* it started talking** — the agent
-running out of synthesized audio mid-reply and stalling before the next chunk is
-ready. Those are two different complaints with two different fixes, which is why
-they're measured separately.
+STT/TTS checks require Apple Silicon and downloaded model weights; the LLM
+check uses the configured endpoint and may incur provider cost. CI intentionally
+runs only platform-independent unit and static checks.
 
-Gaps happen because Chatterbox has no streaming synthesis: audio is made one
-chunk at a time at RTF ~0.9, so a chunk costs roughly its own duration to
-produce. Playback only stays continuous while each chunk lasts long enough to
-cover the *next* one being synthesized — about a 1.1× growth budget per chunk.
-`ClauseEagerAggregator` therefore ramps chunk sizes, sizing each one against
-what was actually just emitted rather than emitting whole sentences.
+## Repository guide
 
-Tune it without editing code (defaults shown):
+| Path | Purpose |
+|---|---|
+| `main.py` | Session configuration and Pipecat pipeline assembly |
+| `stt_parakeet.py` | Local segmented Parakeet/MLX service |
+| `tts_chatterbox.py` | Local Chatterbox/MPS service and interruption handling |
+| `clause_aggregator.py` | Latency/continuity-aware text chunking |
+| `turn_metrics.py` | End-to-end latency and playback-gap instrumentation |
+| `tui_app.py` | Textual setup, conversation, and live controls |
+| `scripts/` | Stage benchmarks, diagnostics, and reference capture tools |
+| `tests/` | Platform-independent configuration and control tests |
 
-- `PARROTBOX_MIN_FIRST_CHARS` (24) — first chunk floor. Sets time-to-first-audio.
-  Raising it makes the opening phrase longer but delays every first word;
-  measurements say it buys very little, because the ramp is what prevents gaps.
-- `PARROTBOX_MIN_CHUNK_CHARS` (24) — prosody floor for later chunks. Chatterbox
-  degrades badly below ~5 words, so don't go lower.
-- `PARROTBOX_CHUNK_RAMP` (1.25) — per-chunk growth. Lower is safer (more, smaller
-  chunks); higher gives better prosody but risks gaps.
-- `PARROTBOX_MAX_CHUNK_CHARS` (180) — stop growing past this.
+## Scope, privacy, and safety
 
-`scripts/check_chunking.py` estimates first-audio and gaps for a policy without
-loading any models, so you can compare settings in seconds. Treat it as a guide:
-`gap_total_ms` in `logs/turns-*.jsonl` is the ground truth. If gaps are near
-zero and it still feels slow, the problem is `ttfa`, not chunking — check which
-of the three stages dominates before changing anything here.
-
-One case the ramp cannot fix is a long sentence with no commas: there is nothing
-to split on, so it synthesizes as one long chunk. That needs streaming synthesis
-(see ARCHITECTURE.md).
-
-## Configuration (environment variables)
-
-- `DEEPSEEK_API_KEY` — API key for the default DeepSeek-direct endpoint.
-- `OPENROUTER_API_KEY` — API key for the OpenRouter gateway instead; set this
-  (or `LLM_PROVIDER=openrouter`) to route the LLM through openrouter.ai.
-  Model slugs there are provider-prefixed, e.g. `deepseek/deepseek-v4-flash`.
-- `LLM_PROVIDER` — `deepseek` or `openrouter`; auto-detected from whichever
-  key is set otherwise (both set → DeepSeek unless named).
-- `LLM_MODEL`, `LLM_BASE_URL` — override the model / point at any
-  OpenAI-compatible provider. Defaults follow the resolved profile.
-- `VOICE_REFERENCE` — path to the reference WAV (default `voice_ref/reference.wav`).
-- `AUDIO_IN_DEVICE` / `AUDIO_OUT_DEVICE` — device indices for routing to a virtual
-  device (e.g. BlackHole, for feeding other apps like Zoom); enumerate with
-  `uv run python scripts/list_audio_devices.py`.
-
-## Notes
-
-This is a personal, single-user, hobby-scale project, not a hardened product.
-It targets Apple Silicon specifically. The bundled `persona.md` and the eval test
-sentences are illustrative examples — replace them with your own.
-
-## ⚠️ Voice cloning — your responsibility
-
-This software clones a person's voice from a short reference recording. **Only
-clone a voice you own, or one you have explicit, documented permission to
-reproduce.** Cloning someone's voice without consent can violate right-of-publicity,
-privacy, impersonation, and AI/deepfake-disclosure laws, which vary by
-jurisdiction. You are solely responsible for how you use it and for complying with
-applicable law. The authors provide this software as-is, with no warranty (see
-LICENSE).
+- Voice references, local persona files, logs, and `.env` files are gitignored.
+- Audio is processed locally for STT and TTS. Transcribed text is sent to the
+  configured LLM endpoint, so that endpoint's privacy terms still apply.
+- There is no acoustic echo cancellation. Use headphones for full-duplex
+  barge-in or half-duplex mode with open speakers.
+- This is a personal prototype, not a hardened multi-user service.
 
 ## License
 
-This project's own code is licensed under the **Apache License 2.0** — see
-[`LICENSE`](LICENSE).
-
-It does **not** include or redistribute its dependencies or any machine-learning
-model weights; those are fetched from PyPI and model hubs when you install and run
-it, and each is covered by **its own license**. See [`NOTICE`](NOTICE) for a
-summary of the notable third-party and model licenses. You are responsible for
-complying with those terms — in particular, **check the model and LLM-provider
-terms before any commercial use**.
+Project code is licensed under the [Apache License 2.0](LICENSE). Dependencies
+and model weights retain their own licenses; see [NOTICE](NOTICE), especially
+before commercial use.

@@ -66,8 +66,9 @@ def main():
     print(f"model load: {time.monotonic() - t0:.1f}s")
 
     # Cold + warm timings via the same raw-array path the Pipecat service uses.
-    import mlx.core as mx
     import wave as wavemod
+
+    import mlx.core as mx
 
     with wavemod.open(str(wav)) as f:
         pcm = np.frombuffer(f.readframes(f.getnframes()), dtype=np.int16)

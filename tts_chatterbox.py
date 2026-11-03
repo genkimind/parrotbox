@@ -19,7 +19,6 @@ from pathlib import Path
 
 import numpy as np
 from loguru import logger
-
 from pipecat.frames.frames import ErrorFrame, Frame, StartFrame
 from pipecat.services.tts_service import TTSService
 

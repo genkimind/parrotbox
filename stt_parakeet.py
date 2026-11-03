@@ -13,7 +13,6 @@ from collections.abc import AsyncGenerator
 
 import numpy as np
 from loguru import logger
-
 from pipecat.frames.frames import ErrorFrame, Frame, StartFrame, TranscriptionFrame
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.utils.time import time_now_iso8601

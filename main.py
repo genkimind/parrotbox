@@ -1,4 +1,4 @@
-"""Local voice agent: mic → Parakeet STT → DeepSeek → Chatterbox clone → speaker.
+"""Apple Silicon voice agent: local STT → LLM endpoint → local cloned-voice TTS.
 
 See ARCHITECTURE.md for the full design. The Textual interface is the default:
 on-screen setup, a live conversation pane, and sliders for
@@ -35,7 +35,13 @@ from loguru import logger
 # imported lazily inside the functions below so the TUI's setup screen renders
 # immediately instead of after a multi-second blank.
 from clone_voice import reference_path
-from llm_provider import llm_base_url, llm_model, resolve_llm_provider
+from llm_provider import (
+    llm_api_key,
+    llm_base_url,
+    llm_config_errors,
+    llm_model,
+    resolve_llm_provider,
+)
 from persona import build_system_prompt
 from runtime_controls import RuntimeControls
 
@@ -163,6 +169,7 @@ def build_pipeline(
     # Seed the live controls from the session's starting speed; the TUI mutates
     # this same object in place while the pipeline runs.
     controls = controls or RuntimeControls(speed=config.speed)
+    stt = ParakeetMLXSTTService()
     transport = LocalAudioTransport(
         LocalAudioTransportParams(
             audio_in_enabled=True,
@@ -179,6 +186,7 @@ def build_pipeline(
 
     provider = resolve_llm_provider()
     llm = OpenAILLMService(
+        api_key=llm_api_key(provider),
         base_url=llm_base_url(provider),
         settings=OpenAILLMService.Settings(
             model=llm_model(provider),
@@ -285,11 +293,9 @@ def _check_prerequisites(*, console: bool):
     except ValueError as e:
         logger.error(str(e))
         sys.exit(1)
-    if not os.environ.get(provider.api_key_env):
-        logger.error(
-            f"{provider.api_key_env} is not set (provider: {provider.name} — "
-            "set a key or choose another provider via LLM_PROVIDER)"
-        )
+    errors = llm_config_errors(provider)
+    if errors:
+        logger.error(f"Invalid LLM configuration ({provider.name}): {'; '.join(errors)}")
         sys.exit(1)
     # The TUI has an in-app clone flow, so a missing reference is a setup-screen
     # state there, not a fatal error. The console flow has no way to fix it, so
@@ -455,7 +461,7 @@ async def run_tui():
 
     # Pay the pipecat/torch import cost in the background while the user is on
     # the setup screen, so Start doesn't stall on it.
-    warm_task = asyncio.create_task(asyncio.to_thread(_warm_imports))
+    _warm_task = asyncio.create_task(asyncio.to_thread(_warm_imports))
 
     async def start_session(setup: SessionSetup):
         from pipecat.workers.runner import WorkerRunner

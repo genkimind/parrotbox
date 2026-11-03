@@ -35,7 +35,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from loguru import logger
-
 from pipecat.frames.frames import (
     BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,

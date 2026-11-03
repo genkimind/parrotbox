@@ -31,14 +31,13 @@ from textual.widgets import (
     Static,
 )
 
+import clone_voice
+from runtime_controls import PARAM_SPECS, ParamSpec, RuntimeControls
+
 # Emitted (at DEBUG) by pipecat when the StartFrame reaches the end of the
 # pipeline — i.e. every model is loaded and warm. We watch the log stream for
 # it to flip the TUI from "booting" to "live".
 READY_MARKER = "pipeline is now ready"
-
-from runtime_controls import PARAM_SPECS, ParamSpec, RuntimeControls
-
-import clone_voice
 
 
 class TranscriptBus:

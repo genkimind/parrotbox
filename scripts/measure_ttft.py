@@ -8,7 +8,6 @@ provider now, before integrating.
 """
 
 import asyncio
-import os
 import statistics
 import sys
 import time
@@ -16,9 +15,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from llm_provider import llm_base_url, llm_model, resolve_llm_provider  # noqa: E402
-
 from openai import AsyncOpenAI  # noqa: E402
+
+from llm_provider import (  # noqa: E402
+    llm_api_key,
+    llm_base_url,
+    llm_config_errors,
+    llm_model,
+    resolve_llm_provider,
+)
 
 
 async def one_request(client: AsyncOpenAI, model: str) -> float:
@@ -40,8 +45,11 @@ async def one_request(client: AsyncOpenAI, model: str) -> float:
 async def main():
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 20
     provider = resolve_llm_provider()
+    errors = llm_config_errors(provider)
+    if errors:
+        raise SystemExit("; ".join(errors))
     client = AsyncOpenAI(
-        api_key=os.environ[provider.api_key_env],
+        api_key=llm_api_key(provider),
         base_url=llm_base_url(provider),
     )
     model = llm_model(provider)

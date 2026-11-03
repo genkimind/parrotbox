@@ -1,8 +1,10 @@
-# Local Pipecat Voice Agent — Architecture
+# Parrotbox — Architecture
 
-Personal voice assistant running entirely on a MacBook Pro (Apple Silicon, 18 GB unified
-memory), cloned from the owner's voice, single user. Local mic/speaker via Pipecat
-`LocalAudioTransport`. Hosted LLM; everything else local.
+Single-user voice agent optimized for Apple Silicon. Microphone capture, turn detection,
+Parakeet/MLX speech recognition, Chatterbox/MPS voice-cloned synthesis, and speaker output
+run on the Mac. The LLM is deliberately isolated behind an OpenAI-compatible endpoint,
+which may be hosted or run locally. Local mic/speaker I/O uses Pipecat's
+`LocalAudioTransport`.
 
 Written 2026-07-22. Facts about library state were verified against upstream repos/docs on
 that date, then against the actually-installed packages (see "Verified against installed
@@ -16,7 +18,7 @@ measured numbers where marked **[measured]**.
 | VAD | Silero (Pipecat built-in) | `confidence=0.7, start_secs=0.2, stop_secs=0.2, min_volume=0.6` |
 | Turn detection | Smart Turn v3 (`LocalSmartTurnAnalyzerV3`, built-in) | ~8M params, 12–30 ms CPU. Lets Silero `stop_secs` drop 0.8 → 0.2 s — the cheapest 600 ms available |
 | STT | Parakeet TDT 0.6B **v3** via **parakeet-mlx** | Replaces parakeet-rs/ONNX plan: native Metal via MLX, pure Python, streaming API. v3 over v2: English WER delta <1 pt (noise in agent context), Spanish for free |
-| LLM | Hosted, OpenAI-compatible (DeepSeek direct by default; OpenRouter via `OPENROUTER_API_KEY` as the gateway/fallback profile) | `OpenAILLMService(base_url=...)`, profiles in `llm_provider.py`. TTFT is the dominant, highest-variance latency term — measure from local network before committing |
+| LLM | OpenAI-compatible endpoint (DeepSeek and OpenRouter profiles; custom hosted/local endpoint supported) | `OpenAILLMService(api_key=..., base_url=...)`, profiles in `llm_provider.py`. TTFT is the dominant, highest-variance latency term — measure from the real network before committing |
 | TTS | **Chatterbox-Turbo** (350M, MIT, official MPS) | Replaces base Chatterbox (500M): smaller, faster, built for agent loops, same `audio_prompt_path` cloning. **Batch-only upstream — no streaming synthesis** |
 | Orchestration | Pipecat (current) | No first-class local Parakeet or local Chatterbox services → two custom services (this repo) |
 

@@ -16,7 +16,6 @@ from asyncio import AbstractEventLoop
 from collections.abc import Callable
 
 from loguru import logger
-
 from pipecat.frames.frames import Frame, LLMContextFrame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
