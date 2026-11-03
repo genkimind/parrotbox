@@ -1,316 +1,328 @@
-# Parrotbox — Architecture
+# Parrotbox architecture
 
-Single-user voice agent optimized for Apple Silicon. Microphone capture, turn detection,
-Parakeet/MLX speech recognition, Chatterbox/MPS voice-cloned synthesis, and speaker output
-run on the Mac. The LLM is deliberately isolated behind an OpenAI-compatible endpoint,
-which may be hosted or run locally. Local mic/speaker I/O uses Pipecat's
-`LocalAudioTransport`.
+Parrotbox is a single-user voice agent for Apple Silicon. It listens through
+the Mac's microphone, transcribes speech locally, sends text to an
+OpenAI-compatible language model, and speaks the reply in a cloned voice.
 
-Written 2026-07-22. Facts about library state were verified against upstream repos/docs on
-that date, then against the actually-installed packages (see "Verified against installed
-versions" below), which resolved every `API-CHECK` and replaced budget guesses with
-measured numbers where marked **[measured]**.
+This document describes the system that exists today. Benchmark methodology
+and tuning results are in [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
 
-## Stack (final)
+## Scope and boundaries
 
-| Stage | Choice | Why / notes |
-|---|---|---|
-| VAD | Silero (Pipecat built-in) | `confidence=0.7, start_secs=0.2, stop_secs=0.2, min_volume=0.6` |
-| Turn detection | Smart Turn v3 (`LocalSmartTurnAnalyzerV3`, built-in) | ~8M params, 12–30 ms CPU. Lets Silero `stop_secs` drop 0.8 → 0.2 s — the cheapest 600 ms available |
-| STT | Parakeet TDT 0.6B **v3** via **parakeet-mlx** | Replaces parakeet-rs/ONNX plan: native Metal via MLX, pure Python, streaming API. v3 over v2: English WER delta <1 pt (noise in agent context), Spanish for free |
-| LLM | OpenAI-compatible endpoint (DeepSeek and OpenRouter profiles; custom hosted/local endpoint supported) | `OpenAILLMService(api_key=..., base_url=...)`, profiles in `llm_provider.py`. TTFT is the dominant, highest-variance latency term — measure from the real network before committing |
-| TTS | **Chatterbox-Turbo** (350M, MIT, official MPS) | Replaces base Chatterbox (500M): smaller, faster, built for agent loops, same `audio_prompt_path` cloning. **Batch-only upstream — no streaming synthesis** |
-| Orchestration | Pipecat (current) | No first-class local Parakeet or local Chatterbox services → two custom services (this repo) |
+Parrotbox is designed to:
 
-Fallbacks: Chatterbox-Nano (110M, CPU) if MPS synth latency disappoints; low-TTFT LLM
-provider (Groq/Cerebras-class) if DeepSeek p95 TTFT > 1 s.
+- hold a live spoken conversation with interruption support;
+- clone a permitted voice from a short recording;
+- apply a user-defined persona from a Markdown file;
+- run speech recognition and synthesis on the Mac; and
+- work with either a hosted or local OpenAI-compatible LLM endpoint.
 
-## Pipeline graph
+It deliberately targets one user on an Apple Silicon Mac. It is not a portable
+desktop app, a multi-user service, or an acoustic echo cancellation system.
 
-```
-transport.input()          LocalAudioTransport: mic 16 kHz → InputAudioRawFrame
-                           Silero VAD → UserStarted/StoppedSpeaking
-                           Smart Turn v3 gates end-of-turn
-                           speech during playback → StartInterruptionFrame (out-of-band)
-stt                        ParakeetMLXSTTService (custom, SegmentedSTTService)
-                           whole VAD segment → TranscriptionFrame
-context_aggregator.user()  appends user msg, triggers LLM
-llm                        OpenAILLMService → LLMTextFrame token stream
-tts                        ChatterboxTTSService (custom, TTSService)
-                           text aggregator: ClauseEagerAggregator (custom)
-                           per chunk: blocking MPS generate() in executor, epoch-gated
-                           → TTSAudioRawFrame (24 kHz, 40 ms slices) + TTSTextFrame
-transport.output()         plays audio; forwards TTSTextFrame only as audio plays
-context_aggregator.assistant()   AFTER output() → history records only *played* text
-                                 (this is the barge-in state-reconciliation mechanism)
+Audio stays on the Mac for speech recognition and synthesis. The configured
+LLM receives the persona, conversation history, and user transcripts. When the
+LLM is hosted, that text leaves the Mac.
+
+## Data flow
+
+```mermaid
+flowchart LR
+    subgraph Mac[Apple Silicon Mac]
+        Mic[Microphone] --> Gate[Mic gate]
+        Gate --> Turn[Silero VAD<br/>Smart Turn]
+        Turn --> STT[Parakeet STT<br/>MLX]
+        STT --> Context[Conversation context]
+        Context --> Client[OpenAI-compatible client]
+        Client --> Chunker[Clause chunker]
+        Chunker --> TTS[Chatterbox-Turbo<br/>MPS]
+        TTS --> Speaker[Speaker]
+        Speaker --> History[Assistant history]
+    end
+
+    Client <--> Endpoint[LLM endpoint<br/>hosted or local]
 ```
 
-## Latency budget (end-of-user-speech → first audio out)
+The diagram shows the logical flow. Pipecat's processor order is slightly
+different:
 
-| Stage | Budget | Notes |
+```text
+audio input
+  → MicGate
+  → ParakeetMLXSTTService
+  → user context aggregator (VAD + Smart Turn)
+  → MeetingGate, when enabled
+  → OpenAILLMService
+  → ChatterboxTTSService
+  → audio output
+  → assistant context aggregator
+```
+
+The user aggregator sends VAD start and stop frames upstream to the STT
+service. This allows the STT processor to appear before the aggregator while
+still receiving correctly bounded speech segments.
+
+## Component map
+
+| Component | Implementation | Responsibility |
 |---|---|---|
-| VAD trailing silence | 200 ms | only viable with Smart Turn gating |
-| Smart Turn inference | 15–30 ms | CPU |
-| STT finalize (segmented) | ~250 ms **[measured]** | 244–256 ms warm for 4.9 s audio, perfect transcript (`scripts/check_stt.py`) |
-| LLM RTT + TTFT | ~1050 ms **[measured]** | deepseek-v4-flash, thinking disabled, measured from a residential network: first content token p50 ≈ 1.0–1.15 s and it's baseline RTT/queue, not reasoning (first *reasoning* token also took ~1.1 s). Thinking-on adds ~350 ms more — disabled via `extra_body: {"thinking": {"type": "disabled"}}`. Your own numbers depend heavily on your location relative to the provider — measure before committing (`scripts/measure_ttft.py`) |
-| LLM first-clause tokens | 100–250 ms | ~15–25 tokens |
-| TTS first-chunk synth | ~1000–1500 ms **[measured]** | steady-state MPS RTF 0.73–0.97, so a chunk costs ≈ its own audio duration; first clause held to ~1 s of speech (`min_first_chars=24`) |
-| Output buffering | 30–50 ms | |
-| **Total** | **~2.6–3.0 s typical [measured components]** | both dominant terms measured worse than estimated: DeepSeek TTFT ~1.05 s (network-bound) + Turbo MPS RTF ~0.9. Sub-1.5 s needs *both* paths below |
+| Audio I/O | Pipecat `LocalAudioTransport` | Capture 16 kHz microphone audio and play 24 kHz output |
+| Manual mute | `MicGate` | Drop microphone frames without stopping the audio stream |
+| Voice activity | Silero VAD | Detect speech boundaries |
+| Turn detection | Smart Turn v3.2 | Decide whether a pause completes the user's turn |
+| Speech recognition | `ParakeetMLXSTTService` | Transcribe a completed segment on MLX |
+| Conversation state | `LLMContextAggregatorPair` | Store messages and trigger LLM requests |
+| Meeting mode | `MeetingGate` | Hold requests until the user asks for a response |
+| Language model | Pipecat `OpenAILLMService` | Stream text from the configured endpoint |
+| Text chunking | `ClauseEagerAggregator` | Split streamed text into synthesis-sized clauses |
+| Text cleanup | `TTSNormalizeFilter` | Convert Markdown and symbols into speakable text |
+| Voice synthesis | `ChatterboxTTSService` | Generate cloned-voice audio on MPS |
+| Metrics | `TurnMetricsObserver`, `TTSChunkLog` | Record latency, synthesis speed, and playback gaps |
+| Interface | Textual | Configure and control the session |
 
-Paths back toward the target, in order of expected payoff:
-1. **TTS first-chunk**: the chatterbox-streaming fork (incremental s3gen decode →
-   ~300–500 ms first audio) — evaluate Turbo compatibility; else benchmark
-   Chatterbox-Nano (110M) or check for an mlx-audio Chatterbox port.
-2. **LLM TTFT**: measured 1.0–1.1 s is route/queue-bound (first reasoning token also
-   ~1.1 s), so no DeepSeek-side tuning will fix it. A geographically closer, low-TTFT
-   provider (Groq/Cerebras-class) would land ~300–500 ms. DeepSeek is the chosen
-   primary here; a fallback/fast-path provider is the lever if the total feels sluggish.
-   Thinking is disabled either way (~350 ms saved, already wired).
+Pipecat provides the pipeline and transport. Parrotbox supplies the local
+Parakeet and Chatterbox services.
 
-Critical path is fully serial. After the first chunk, everything overlaps (chunk n plays
-while n+1 synthesizes and the LLM streams). Biggest single win: LLM provider TTFT.
-Second: eager first-clause TTS chunking (in the design). Streaming STT during speech
-was evaluated and rejected for now — see "Streaming handoffs" below.
+## How a turn is processed
 
-## Streaming handoffs
+1. The input transport emits microphone frames.
+2. `MicGate` forwards them unless the user has muted the microphone.
+3. Silero detects speech. Smart Turn decides when the utterance is complete.
+4. Parakeet transcribes the completed audio segment.
+5. The user context aggregator appends the transcript to `LLMContext`.
+6. The LLM streams a reply. In meeting mode, this step waits until the user
+   presses `r`.
+7. The clause aggregator sends complete phrases to Chatterbox-Turbo.
+8. Chatterbox emits 40 ms audio frames for playback.
+9. The assistant context aggregator records the text after it reaches the
+   output stage.
 
-- Chunk policy (`ClauseEagerAggregator`): **ramped**. Every chunk flushes at a clause
-  boundary (comma/semicolon/colon/dash) once past a minimum, and that minimum grows in
-  proportion to the chunk just emitted (`min_chunk_chars=24`, `ramp=1.25`, capped at 180).
-  The first chunk's floor stays at 24 chars, because it sets time-to-first-audio.
+The last step is important. History contains what the user heard, not every
+token the LLM generated. An interrupted reply therefore leaves an accurate
+conversation state.
 
-  This replaces the original "eager first chunk, then full sentences" policy, which was
-  wrong: playback stays continuous only while `synth(chunk k) ≤ duration(chunk k-1)`, and
-  at RTF ~0.9 that allows only ~1.1× growth per chunk. Emitting full sentences after a ~1s
-  opener blew that budget badly — measured (`scripts/check_chunking.py`) at 4.94s of total
-  dead air per reply, worst case 7.72s. Ramping cuts that to 2.20s / 3.08s at unchanged
-  time-to-first-audio.
+## Startup and model lifetime
 
-  Note the counter-intuitive result: **lengthening the first chunk is not the fix.** Going
-  24 → 48 chars improves gaps by 0.06s while adding 0.37s before every first word. The
-  bound on *subsequent* chunks is what buys continuity. Residual gaps are all long
-  clause-free sentences, which have no legal split point — only streaming synthesis fixes
-  those.
-- Chatterbox upstream is batch-per-`generate()` (verified against repo). The
-  davidbrowne17/chatterbox-streaming fork adds token-loop streaming for *base*
-  Chatterbox; Turbo compatibility unknown. Evaluate only after the batch pipeline works
-  — would cut first-audio by 300–500 ms.
-- **Streaming STT — evaluated, not shipped (2026-08-21, parakeet-mlx 0.5.2).** The
-  earlier projection ("streaming STT during speech cuts finalize to ~50 ms") assumed
-  incremental encoding; the installed implementation doesn't work that way. Measured
-  (`scripts/check_stt.py --streaming`):
+The TUI opens before importing the ML stack. Heavy imports continue in the
+background while the setup screen is visible.
 
-  - `add_audio()` re-decodes the whole *draft region* on every call; its size is
-    `context_size[1] × depth` frames (default (256,256) ≈ 16 s). Utterances shorter
-    than that never finalize mid-speech, so every feed costs a near-full pass:
-    ~180–235 ms per 320 ms chunk, RTF ~0.4–0.7 — during-speech only, but it makes the
-    stop-time tail flush ≈ one full-window pass.
-  - Finalize at VAD stop is therefore "last-chunk cost", not ~free: ~235 ms at
-    ctx=(256,256) ≈ batch; ~130–150 ms at ctx=(64,64); hard floor ~90 ms even at
-    (16,16) — the projected ~50 ms is unreachable in this version.
-  - Quality: batch-equal on clean TTS audio, but on the real reference recording
-    ctx=(64,64) drops onset words and mangles tails ("bank" → "bunk"); narrow-right
-    contexts ((256,16) etc.) collapse entirely.
+When a session starts, Pipecat links the pipeline and loads the models.
+Parakeet and Chatterbox perform warm-up work before the session becomes ready,
+then remain resident until the app exits.
 
-  Verdict: batch finalize (~250 ms warm) stays; streaming buys ≤100 ms at best and
-  costs transcript accuracy where it hurts. Re-run the harness if parakeet-mlx ships
-  cheaper incremental decoding — ship only when last-chunk cost lands well under
-  batch at batch-equal text.
+The voice-clone preview screen temporarily loads its own Chatterbox instance.
+It unloads that model before the conversation session starts.
 
-## Barge-in design
+## Latency and parallelism
 
-Pipecat machinery (via `allow_interruptions=True`): input transport pushes
-`StartInterruptionFrame` as an out-of-band system frame (bypasses processor queues);
-LLM service cancels its HTTP stream (server-side abort best-effort); base TTSService
-clears queued text; output transport flushes buffers.
+The path to the first spoken word is serial:
 
-What Pipecat can't do — the four real hazards:
+```text
+end of speech
+  → turn decision
+  → STT finalization
+  → LLM first content
+  → first complete clause
+  → TTS generation
+  → audio output
+```
 
-1. **Uncancellable MPS kernel.** A `generate()` in flight runs to completion. Epoch
-   counter in the TTS service: interruption bumps epoch (seen immediately in
-   `process_frame`), orphaned job finishes into the void, output gated by epoch.
-   **Never join/await the running synth on the interruption path** — blocking the event
-   loop for a synth duration is the deadlock trap. Cost: one wasted GPU job briefly
-   contending with the interrupting utterance's STT.
-2. **Ghost audio.** Emit 40 ms audio slices (transport can only flush what isn't
-   committed). OS/PortAudio buffer (~30–50 ms) is unflushable but inaudible. Hearing
-   >100 ms ghost audio ⇒ some processor yielded one giant frame.
-3. **Context reconciliation.** Structural: assistant aggregator after
-   `transport.output()` records only played text (granularity: one TTS chunk). Never
-   aggregate assistant text from upstream `LLMTextFrame`s.
-4. **Straggler races.** Implement `handle_interruption`/`reset` on the text aggregator;
-   don't cache state across interruptions in custom code.
+Reference measurements from an 18 GB Apple Silicon Mac:
 
-False barge-in (echo — `LocalAudioTransport` has no AEC): wear a headset (the right
-answer for single-user), or macOS Voice Isolation at runtime (never during reference
-capture), or raise VAD confidence during agent playback. Don't build AEC.
+| Stage | Observed time | Notes |
+|---|---:|---|
+| VAD trailing silence | 200 ms | Configured value |
+| Smart Turn | 15–30 ms | CPU inference |
+| Parakeet finalization | 244–256 ms warm | 4.9 s clean test clip |
+| DeepSeek first content | about 1.0–1.15 s | Network and provider dependent |
+| First Chatterbox chunk | about 1.0–1.5 s | Warm MPS synthesis |
+| Output buffering | about 30–50 ms | Transport and OS buffer |
+| End of speech to first audio | about 2.6–3.0 s | Typical total |
 
-## Turn detection tuning
+After playback begins, work overlaps: one chunk plays while the next chunk
+synthesizes and the LLM continues producing text.
 
-With a turn analyzer, Silero `stop_secs=0.2` is only the trigger to *ask* smart-turn;
-if incomplete, Pipecat waits up to `SmartTurnParams.stop_secs` (2.5 s) before forcing
-end-of-turn. Snappy on clean completions, graceful on thinking pauses.
+The largest remaining latency opportunities are a faster LLM endpoint and
+streaming TTS. Streaming STT offers little benefit with the pinned Parakeet
+version.
 
-Tuning loop: log `(t_vad_stop, t_turn_decision, decision, t_transcript)` per turn.
-Cut off mid-thought → raise smart-turn stop_secs. Sluggish → check smart-turn
-probability logs. Triggers on breath/keyboard → confidence 0.8, raise min_volume.
-Clips first syllable → start_secs 0.15.
+## TTS chunking and playback continuity
 
-## Persona layer
+Chatterbox-Turbo generates one complete audio chunk per call. Its measured
+real-time factor is about 0.9, so one second of audio takes roughly 0.9 seconds
+to synthesize.
 
-The system prompt (see `persona.py`) is the user-authored one with these deltas:
-- Barge-in rule: history shows only what was actually said; never resume a cut-off
-  thought unless asked.
-- Spoken-form outputs: numbers/units/acronyms speakable ("eighteen gigs", "A-W-S").
-- Disfluency cap promoted into the prompt: hedges/corrections in ~1 of 3–4 responses.
-- Samples sanitized to work-appropriate register.
-- Meta sections (corpus extension, tuning notes) kept out of the runtime prompt.
+Playback stays continuous when the next chunk finishes before the current
+chunk stops playing:
 
-Few-shot vs distilled: hybrid, weighted distilled. 6–10 short samples (~600–900 tokens)
-covering distinct modes (asking, pushing back, casual, teaching, disagreeing-with-agent)
-beats 20 of one mode. DeepSeek prefix caching makes the stable prompt near-free after
-turn one.
+```text
+synthesis_time(next_chunk) <= audio_duration(current_chunk)
+```
 
-## Context management
+`ClauseEagerAggregator` uses a ramped policy:
 
-Stable-prefix rolling window with lazy background summarization:
-- System prompt + samples never change byte-for-byte → prefix cache eats the cost.
-- Verbatim history to ~8k tokens.
-- Then summarize oldest half into one system-role summary after the persona block; keep
-  last ~20 turns verbatim. Summarize fire-and-forget during playback/idle, splice
-  between turns (one cache-miss turn per splice — acceptable).
-- Summary preserves commitments and open threads, not a transcript digest.
+- the first clause can flush after 24 characters;
+- each later minimum depends on the length of the previous chunk;
+- the minimum grows by 1.25×, capped at 180 characters; and
+- splits occur only at clause or sentence boundaries.
+
+In the included simulation, this reduced total playback gaps from 4.94 seconds
+to 2.20 seconds without delaying the first chunk. Long sentences without clause
+boundaries can still cause gaps. Streaming TTS is the proper fix for that case.
+
+The policy can be adjusted with:
+
+| Variable | Default |
+|---|---:|
+| `PARROTBOX_MIN_FIRST_CHARS` | 24 |
+| `PARROTBOX_MIN_CHUNK_CHARS` | 24 |
+| `PARROTBOX_CHUNK_RAMP` | 1.25 |
+| `PARROTBOX_MAX_CHUNK_CHARS` | 180 |
+
+## Interruption handling
+
+When the user speaks during playback, Pipecat cancels the LLM stream, clears
+pending TTS text, and flushes audio that has not yet played.
+
+Four details matter:
+
+1. **MPS generation cannot be cancelled.** A Chatterbox call already running
+   in the worker thread finishes, but its result is discarded.
+2. **Audio uses 40 ms frames.** Small frames limit how much queued speech can
+   survive an interruption. Audio already inside the OS buffer cannot be
+   recalled.
+3. **History follows output.** Text that was generated but never played is not
+   stored as something the agent said.
+4. **Partial text is cleared.** The clause aggregator resets on interruption.
+
+There is no echo cancellation. Full duplex requires headphones. Half-duplex
+mode supports open speakers by muting the microphone while Parrotbox talks.
+
+## Turn detection and STT
+
+Current Silero settings:
+
+```text
+confidence=0.7
+start_secs=0.2
+stop_secs=0.2
+min_volume=0.6
+```
+
+After 200 ms of silence, Smart Turn decides whether the user has finished. If
+the utterance appears incomplete, Pipecat waits for more speech for up to 2.5
+seconds.
+
+Parakeet runs after the turn ends. It receives the full speech segment as
+16-bit PCM, converts it to a float array, and transcribes it on a worker thread
+so MLX inference does not block the event loop.
+
+## Streaming STT — evaluated, not shipped
+
+Parakeet MLX 0.5.2 exposes a streaming API, but it re-decodes a draft region
+whenever audio is added. On the reference system:
+
+- the default context took about 180–235 ms for each 320 ms audio feed;
+- finalization remained about 235 ms, close to batch finalization;
+- smaller contexts reduced finalization to 130–150 ms but harmed accuracy; and
+- very small contexts still had an observed floor near 90 ms.
+
+The small latency saving did not justify the accuracy loss and continuous
+during-speech compute. The current service therefore transcribes one completed
+segment. The evaluation remains available through
+`scripts/check_stt.py --streaming`.
+
+## LLM, persona, and conversation state
+
+`llm_provider.py` supports DeepSeek, OpenRouter, and any custom
+OpenAI-compatible endpoint. A custom endpoint can be hosted or local. Provider
+profiles supply their own model defaults and request options; the custom
+profile sends no provider-specific options.
+
+`persona.py` loads `persona.local.md` when present and otherwise uses the
+tracked example. Scenario and meeting-mode instructions are appended after the
+persona so the main prompt prefix remains stable.
+
+Conversation state is intentionally simple:
+
+- user transcripts and played assistant text accumulate in `LLMContext`;
+- typed speech is added even though it bypasses the LLM;
+- clearing resets the context to the original system prompt;
+- meeting mode accumulates user turns while responses are held; and
+- there is no automatic context summarization yet.
 
 ## Voice clone reference capture
 
-- In-product: the TUI's Clone screen records once (~30 s+), auto-slices spread
-  12 s candidate windows (`clone_voice.py`, no ffmpeg), synthesizes one fixed
-  preview sentence per candidate with a single Chatterbox load, plays them back
-  for A/B, and copies the winner to `voice_ref/reference.wav`. Preview model is
-  unloaded on exit so the session doesn't hold two Chatterbox copies.
-- 48 kHz WAV, **no processing**: disable Voice Isolation/AGC/noise suppression for
-  capture. Quiet damped room; reverb in reference = permanent reverb in clone.
-- Natural conversational speech, normal energy, include a question + a statement.
-  Don't read, don't perform.
+The TUI records one sample and selects several 12-second windows from it. It
+synthesizes the same preview sentence with every candidate so the user can
+compare them and save the best one as `voice_ref/reference.wav`.
 
-## Resource budget (18 GB unified)
+The reference should be an unprocessed 48 kHz mono WAV recorded in a quiet
+room. The directory is gitignored. Only clone a voice you own or have
+permission to reproduce.
 
-| Component | Framework | Resident | Pattern |
-|---|---|---|---|
-| Parakeet 0.6B fp16 | MLX | ~1.3–1.5 GB | 100–300 ms bursts after user speech |
-| Chatterbox-Turbo + vocoder | PyTorch MPS | ~2–3 GB | 0.4–1 s bursts during agent speech |
-| Smart Turn v3 | CPU | ~50 MB | per turn boundary |
-| Silero | CPU | ~2 MB | continuous |
+## Resource use
 
-Total ~5–6 GB incl. runtime. Both stay resident on GPU; run nothing on CPU. Compute is
-naturally time-multiplexed (STT while user speaks, TTS while agent speaks); only
-overlap is the barge-in instant. Watch **thermals**: TTS RTF creeping up over 30+ min
-sessions is throttling, not a leak — log per-chunk RTF over session time.
+Reference measurements on an 18 GB unified-memory Mac:
 
-## Failure modes / observability
+| Component | Framework | Approximate memory |
+|---|---|---:|
+| Parakeet 0.6B fp16 | MLX | 1.3–1.5 GB |
+| Chatterbox-Turbo and vocoder | PyTorch MPS | 2–3 GB |
+| Smart Turn v3.2 | ONNX Runtime / CPU | about 50 MB |
+| Silero | ONNX Runtime / CPU | about 2 MB |
 
-- LLM timeout: watchdog — no first token in ~3 s → cancel, retry once or play a
-  pre-synthesized canned interstitial WAV. Handle ErrorFrames at task level.
-- Audio device change (AirPods): PortAudio streams don't follow default-device
-  switches. Catch stream errors, rebuild transport (models stay loaded, ~1 s recovery).
-  Detect silent failure via "no VAD activity for N min on a healthy stream".
-- Model load: load + warm both at startup, fail fast before opening the mic.
-- VAD misfires: log Silero confidence histogram continuously.
-- Metrics: **implemented** in `turn_metrics.py`. `TurnMetricsObserver` is a pipecat
-  `BaseObserver` (registered via `PipelineWorker(observers=[...])`, so it watches every
-  frame without sitting in the pipeline) that stitches `vad_stop → transcript →
-  llm_first_token → tts_first_audio` into one INFO line per turn, plus a JSON record in
-  `logs/turns-<timestamp>.jsonl`. Every latency regression is a delta in exactly one of
-  those gaps.
+Normal process usage is roughly 5–6 GB. STT and TTS usually run at different
+times, but briefly compete when the user interrupts an in-progress synthesis.
+A rising TTS real-time factor over a long session usually indicates thermal
+throttling.
 
-  Two things this had to add beyond pipecat's built-ins:
+## Observability
 
-  1. `can_generate_metrics()` returns `False` on the `FrameProcessor` base, and only
-     vendor services override it — so the `start/stop_*_metrics()` calls already present
-     in `stt_parakeet.py` and `tts_chatterbox.py` were silent no-ops. Both services now
-     override it.
-  2. Pipecat measures TTFB but has no notion of **playback gaps** — dead air *after*
-     speech starts, when a chunk's synthesis outlasts the previous chunk's duration.
-     That's the metric that governs whether a reply sounds fluent, so `TTSChunkLog`
-     derives it directly from per-chunk synth timings (playback is modelled as: a chunk
-     starts at `max(t_synth_done, previous_playback_end)`; any daylight is a gap).
+`TurnMetricsObserver` watches pipeline frames without adding another processor
+to the critical path. Each turn produces a readable log line and a JSONL record:
 
-  Per-chunk RTF is recorded alongside, which is the thermal-throttling signal — RTF
-  drifting up over a long session is throttling, not a leak.
+```text
+TURN ttfa=2.35s (stt 0.25s | llm 1.04s | tts 1.05s) chunks=3 audio=6.00s gaps=1.60s max=1.60s
+```
 
-## Open questions — resolved
+Metrics include STT, LLM, and TTS latency; total time to first audio; per-chunk
+synthesis speed; and silence between playback chunks. Playback gaps are
+calculated separately because ordinary time-to-first-byte metrics cannot show
+stalls after speech has begun.
 
-1. **Pipecat integration:** no first-class local Parakeet/Chatterbox services (Chatterbox
-   only via hosted NVIDIA NIM). Custom services in this repo, subclassing
-   `SegmentedSTTService`/`TTSService` for free interruption/metrics/aggregation.
-2. **Parakeet v2 vs v3:** v3. WER delta is noise in agent context; Spanish free.
-   Neither handles mid-utterance code-switching well.
-3. **parakeet-rs:** skip. CoreML EP instability is real; MLX makes the problem
-   disappear with no FFI bridge.
-4. **Chatterbox variants:** Turbo. "Sub-200 ms" is Resemble's hosted service — do not
-   budget from it. Early Turbo had MPS float64 dtype crashes (community-fixed) —
-   verify installed version synthesizes on MPS before building on it. Check
-   periodically whether mlx-audio has grown a Chatterbox port (would beat PyTorch-MPS).
-   Rejected: Kokoro (no cloning), F5-TTS (non-commercial weights), Zonos (slower,
-   shaky MPS), OpenAudio S1-mini (non-commercial).
+## Current limitations
 
-## Verified against installed versions (2026-07-22)
+- Apple Silicon and macOS are required by the MLX/MPS implementation.
+- Chatterbox synthesis is batch-based, so some long replies pause between chunks.
+- An interrupted MPS generation finishes in the background before being discarded.
+- Audio-device changes require a session restart.
+- Conversation history grows until the user clears it or ends the session.
+- Full-duplex use requires headphones because there is no echo cancellation.
+- Application-audio routing and multi-speaker meeting behavior are not implemented.
 
-Pinned: pipecat-ai 1.6.0, parakeet-mlx 0.5.2, chatterbox-tts 0.1.7, Python 3.12.
-Pipecat 1.6 restructured the API vs. the draft above — the code reflects reality:
+## Version and validation contract
 
-- **VAD + turn detection moved off the transport** into the user context aggregator:
-  `LLMUserAggregatorParams(vad_analyzer=..., user_turn_strategies=...)`. The aggregator
-  broadcasts `VADUserStartedSpeakingFrame`/`VADUserStoppedSpeakingFrame` **upstream** as
-  well as downstream, which is what lets `SegmentedSTTService` (upstream of the
-  aggregator) segment correctly. Smart Turn v3.2 ships bundled with pipecat (ONNX, no
-  download) and is the *default* stop strategy.
-- **Universal context**: `LLMContext` + `LLMContextAggregatorPair` replace the old
-  OpenAI-specific context. `StartInterruptionFrame` → `InterruptionFrame`.
-  Interruptions are on by default; `PipelineParams.allow_interruptions` is gone.
-- **TTSService** now provides `_stream_audio_frames_from_iterator()` (chunking,
-  resampling, context_id tagging) and cancels the `run_tts` consumer task on
-  interruption — the epoch-counter design in the draft collapsed to "run blocking synth
-  via `run_in_executor` and let cancellation abandon it". Custom text aggregators are
-  installed by assigning `self._text_aggregator` post-init (no constructor kwarg in 1.6).
-- **Dependency landmines** (all handled in pyproject/lock): pyaudio needs
-  `brew install portaudio`; pkuseg needs numpy at build time
-  (`tool.uv.extra-build-dependencies`); chatterbox pins `numpy<2` vs parakeet-mlx's
-  `numpy>=2.2.5` — overridden via `tool.uv.override-dependencies`, validated by running
-  both models; resemble-perth still imports `pkg_resources`, so setuptools is pinned
-  `<81`.
-- **Measured**: Parakeet warm finalize 244–256 ms for 4.9 s audio with a perfect
-  transcript; Chatterbox-Turbo loads and synthesizes on MPS (no dtype crash in 0.1.7),
-  steady-state RTF 0.73–0.97, ~20 s cold first-generate (shader compile — hence the
-  warmup in service start()).
+The pipeline is pinned to Pipecat 1.6.0, parakeet-mlx 0.5.2,
+chatterbox-tts 0.1.7, and Textual 8.2.8 on Python 3.12 or newer.
+`pyproject.toml` and `uv.lock` are the dependency source of truth.
 
-## Deferred: app-audio integration (Zoom etc.)
+Fast checks:
 
-Requested, parked as the hardest feature. The plan when it happens: install
-BlackHole (free virtual audio driver). Zoom's mic is set to "BlackHole 2ch" and the
-agent's `AUDIO_OUT_DEVICE` points at the same BlackHole device, so the agent speaks
-*into* the meeting; Zoom's speaker output goes to a Multi-Output/aggregate device that
-includes a second BlackHole channel the agent's `AUDIO_IN_DEVICE` reads from, so the
-agent hears the meeting. The env-var device routing and
-`scripts/list_audio_devices.py` already exist as the foundation. Open problems: the
-agent hears *everyone* in the meeting (needs speaker diarization or push-to-talk
-gating to know when it's being addressed), and barge-in semantics in a multi-party
-call need rethinking (probably half-duplex + explicit wake phrase).
+```bash
+python -m unittest discover -s tests -v
+uvx ruff check .
+uv run python scripts/check_chunking.py
+```
 
-## Build order (each stage gated)
+Apple Silicon and endpoint checks:
 
-1. **Audio skeleton** — LocalAudioTransport echo pipeline. Gate: mic+speaker work,
-   AirPods toggle behavior known.
-2. **STT isolated** — CLI on recorded file, then service logging transcripts.
-   Gate: finalize <300 ms warm, accurate on owner's voice/vocabulary.
-3. **LLM leg** — `scripts/measure_ttft.py`, 20 iterations against DeepSeek from the
-   real network. Gate: p50/p95 known; p95 >1 s ⇒ decide on fallback provider now.
-4. **Clone quality offline** — capture + eval loop, entirely outside Pipecat.
-   Gate: chosen reference WAV with trusted similarity score, confirmed MPS synth + RTF.
-5. **Full pipeline, no barge-in** — metrics on, stitched latency line.
-   Gate: p50 <1.5 s over 20 real turns.
-6. **Barge-in torture** — interrupt during first-chunk synth, mid-playback,
-   rapid double interrupts. Gate: no ghost audio, no stalls, history = spoken text
-   only, no stale-epoch frames.
-7. **Persona + context management last.**
+```bash
+uv run python scripts/check_stt.py
+uv run python scripts/measure_ttft.py
+uv run python scripts/check_tts.py
+```
+
+The fast checks run in CI. STT and TTS checks require model weights and Apple
+hardware. The LLM check calls the configured endpoint and may incur provider
+cost.
